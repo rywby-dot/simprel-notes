@@ -19,6 +19,9 @@ class SettingToggle(
     private var outline: Int, private val changed: (Boolean) -> Unit,
 ) : LinearLayout(context) {
     private var checked = initial
+    private var fraction = if (initial) 1f else 0f
+    private var animation: android.animation.ValueAnimator? = null
+    private val evaluator = android.animation.ArgbEvaluator()
     private lateinit var label: TextView
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     private val toggle = object : View(context) {
@@ -28,19 +31,19 @@ class SettingToggle(
             val density = resources.displayMetrics.density
             canvas.translate((width - 52 * density) / 2, (height - 32 * density) / 2)
             canvas.scale(density, density)
-            paint.style = Paint.Style.FILL; paint.color = if (checked) accent else surface
+            paint.style = Paint.Style.FILL; paint.color = evaluator.evaluate(fraction, surface, accent) as Int
             canvas.drawRoundRect(0f, 0f, 52f, 32f, 16f, 16f, paint)
-            if (!checked) {
-                paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f; paint.color = outline
+            if (fraction < 1f) {
+                paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f; paint.color = outline; paint.alpha = ((1f - fraction) * 255).toInt()
                 canvas.drawRoundRect(1f, 1f, 51f, 31f, 15f, 15f, paint)
             }
-            paint.style = Paint.Style.FILL; paint.color = if (checked) surface else outline
-            canvas.drawCircle(if (checked) 36f else 16f, 16f, if (checked) 12f else 8f, paint)
-            if (checked) {
-                paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f; paint.strokeCap = Paint.Cap.ROUND; paint.color = accent
+            paint.style = Paint.Style.FILL; paint.alpha = 255; paint.color = evaluator.evaluate(fraction, outline, surface) as Int
+            canvas.drawCircle(16f + 20f * fraction, 16f, 8f + 4f * fraction, paint)
+            if (fraction > 0f) {
+                paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f; paint.strokeCap = Paint.Cap.ROUND; paint.color = accent; paint.alpha = (fraction * 255).toInt()
                 canvas.drawLine(30f, 16f, 34f, 20f, paint); canvas.drawLine(34f, 20f, 42f, 12f, paint)
             }
-            canvas.restore()
+            paint.alpha = 255; canvas.restore()
         }
     }
     init {
@@ -55,7 +58,16 @@ class SettingToggle(
         addView(label, LayoutParams(0, -2, 1f))
         toggle.importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         addView(toggle, LayoutParams(dp(52), dp(48)))
-        setOnClickListener { checked = !checked; toggle.invalidate(); changed(checked); refreshDrawableState() }
+        setOnClickListener {
+            checked = !checked
+            animation?.cancel()
+            animation = android.animation.ValueAnimator.ofFloat(fraction, if (checked) 1f else 0f).apply {
+                duration = 180
+                addUpdateListener { fraction = it.animatedValue as Float; toggle.invalidate() }
+                start()
+            }
+            changed(checked); refreshDrawableState()
+        }
     }
     fun updateAppearance(title: String, accent: Int, surface: Int, textColor: Int, outline: Int) {
         this.accent = accent; this.surface = surface; this.textColor = textColor; this.outline = outline
@@ -65,6 +77,7 @@ class SettingToggle(
         background = RippleDrawable(ColorStateList.valueOf((accent and 0xFFFFFF) or 0x22000000), null, mask)
         toggle.invalidate()
     }
+    override fun onDetachedFromWindow() { animation?.cancel(); super.onDetachedFromWindow() }
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {
         super.onInitializeAccessibilityNodeInfo(info)
         info.className = "android.widget.Switch"; info.isCheckable = true; info.isChecked = checked

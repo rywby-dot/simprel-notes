@@ -5,9 +5,6 @@ import android.util.AtomicFile
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
-import java.util.UUID
-
-data class Note(val id: String = UUID.randomUUID().toString(), var text: String = "")
 
 /** Atomic replacement keeps the previous complete file if a write is interrupted. */
 class Store(context: Context) {

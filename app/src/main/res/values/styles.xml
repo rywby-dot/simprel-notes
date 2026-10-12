@@ -6,6 +6,21 @@
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowLightNavigationBar">true</item>
         <item name="android:windowBackground">@color/launch_background</item>
+        <item name="android:colorBackground">@color/launch_background</item>
     </style>
     <style name="AppTheme" parent="AppThemeBase"/>
+    <style name="AppThemeLight" parent="AppTheme">
+        <item name="android:colorBackground">#FFFBFE</item>
+        <item name="android:windowBackground">#FFFBFE</item>
+    </style>
+    <style name="AppThemeDark" parent="AppTheme">
+        <item name="android:colorBackground">#141218</item>
+        <item name="android:windowBackground">#141218</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+    <style name="AppThemeAmoled" parent="AppThemeDark">
+        <item name="android:colorBackground">#000000</item>
+        <item name="android:windowBackground">#000000</item>
+    </style>
 </resources>

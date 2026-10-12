@@ -26,7 +26,7 @@ fun noteIndex(column: Int, row: Int, count: Int, reverse: Boolean): Int {
     return (if (reverse) ((count + 1) / 2) * 2 - 1 - slot else slot).coerceIn(0, count - 1)
 }
 
-class SwipeProgress(private val slop: Float, private val longPressTimeout: Long) {
+class SwipeProgress(private val slop: Float, private val longPressTimeout: Long, private val bothDirections: Boolean = false) {
     private var startX = 0f
     private var startY = 0f
     private var startedAt = 0L
@@ -38,10 +38,10 @@ class SwipeProgress(private val slop: Float, private val longPressTimeout: Long)
         val dx = x - startX
         val dy = abs(y - startY)
         if (!horizontal) {
-            if (time - startedAt >= longPressTimeout || (dy > slop && dy > abs(dx)) || dx < -slop) { cancelled = true; return null }
-            if (dx > slop && dx > dy * 2) horizontal = true
+            if (time - startedAt >= longPressTimeout || (dy > slop && dy > abs(dx)) || (!bothDirections && dx < -slop)) { cancelled = true; return null }
+            if (abs(dx) > slop && abs(dx) > dy * 2) horizontal = true
         }
-        return if (horizontal) dx.coerceAtLeast(0f) else null
+        return if (horizontal) (if (bothDirections) dx else dx.coerceAtLeast(0f)) else null
     }
 }
 
@@ -49,4 +49,43 @@ fun shouldDismissEditor(distance: Float, width: Float, velocity: Float, density:
     if (width <= 0f || distance <= 0f) return false
     if (velocity < -600f * density) return false
     return distance >= width * .32f || (distance >= 24f * density && velocity >= 700f * density)
+}
+
+/** Badge center follows the 45-degree point of the rounded top-right corner.
+ * One third of its diameter protrudes beyond the local outline. */
+fun noteBadgeCenter(width: Float, radius: Float, badgeRadius: Float): Pair<Float, Float> {
+    val diagonal = 0.70710677f
+    val arcInset = radius * (1f - diagonal) + badgeRadius / 3f * diagonal
+    val blend = (radius / badgeRadius.coerceAtLeast(1f)).coerceIn(0f, 1f)
+    val inset = badgeRadius / 3f * (1f - blend) + arcInset * blend
+    return (width - inset) to inset
+}
+
+/** Recompute an edge against the latest layout, including keyboard resize passes. */
+class ListScrollAnchor {
+    private var edge: Int? = null
+    private var restored: Int? = null
+    fun followInsertion(reverse: Boolean) { edge = if (reverse) 1 else 0; restored = null }
+    fun followBottom() { edge = 1; restored = null }
+    fun restore(position: Int) { edge = null; restored = position }
+    fun release() { edge = null; restored = null }
+    fun target(contentHeight: Int, viewportHeight: Int): Int? {
+        val bottom = (contentHeight - viewportHeight).coerceAtLeast(0)
+        val result = when (edge) { 0 -> 0; 1 -> bottom; else -> restored?.coerceIn(0, bottom) }
+        restored = null
+        return result
+    }
+}
+
+/** An exit keeps Undo available until the next entry; normal panels never restart their timer. */
+data class UndoWindow(val expiresAt: Long, val awaitingEntry: Boolean = false) {
+    fun onEntry(now: Long, seconds: Int): UndoWindow = if (awaitingEntry)
+        UndoWindow(now + seconds.coerceIn(1, 10) * 1000L) else this
+    fun remaining(now: Long): Long = (expiresAt - now).coerceAtLeast(0)
+}
+
+/** Right returns to the list; left saves and exits. Reversing velocity cancels either action. */
+fun editorSwipeAction(distance: Float, width: Float, velocity: Float, density: Float): Int {
+    val direction = if (distance < 0f) -1 else 1
+    return if (shouldDismissEditor(kotlin.math.abs(distance), width, velocity * direction, density)) direction else 0
 }

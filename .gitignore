@@ -7,3 +7,13 @@ local.properties
 .idea/
 .signing/
 dist/
+
+# Private signing material and local credentials
+*.keystore
+*.jks
+*.p12
+*.pfx
+.env
+.env.*
+__pycache__/
+*.pyc

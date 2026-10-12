@@ -6,16 +6,19 @@ android {
         applicationId = "com.simprel.notes"
         minSdk = 26
         targetSdk = 37
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 21
+        versionName = "1.20"
         testInstrumentationRunner = "com.simprel.notes.SmokeTests"
     }
     signingConfigs {
         create("localRelease") {
-            storeFile = rootProject.file(".signing/simprel-notes.keystore")
-            storePassword = providers.environmentVariable("SIMPREL_STORE_PASSWORD").orElse("android").get()
-            keyAlias = "androiddebugkey"
-            keyPassword = providers.environmentVariable("SIMPREL_STORE_PASSWORD").orElse("android").get()
+            val customKeystore = providers.environmentVariable("SIMPREL_KEYSTORE").orNull
+            storeFile = rootProject.file(customKeystore ?: ".signing/simprel-notes.keystore")
+            storePassword = providers.environmentVariable("SIMPREL_STORE_PASSWORD").orNull
+                ?: if (customKeystore == null) "android" else null
+            keyAlias = providers.environmentVariable("SIMPREL_KEY_ALIAS").orNull
+                ?: if (customKeystore == null) "androiddebugkey" else "simprel-release"
+            keyPassword = providers.environmentVariable("SIMPREL_KEY_PASSWORD").orNull ?: storePassword
         }
     }
     buildTypes {
