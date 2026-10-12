@@ -41,7 +41,7 @@
     <string name="russian">Русский</string>
     <string name="english">Английский</string>
     <string name="always_delete">Всегда удаление</string>
-    <string name="always_delete_help">Всегда показывать крестик удаления на каждой заметке. Подтверждение — как для крестика в списке.</string>
+    <string name="always_delete_help">Всегда показывать крестик удаления на каждой заметке. Удерживайте крестик, чтобы скопировать и удалить. Подтверждение — как для крестика в списке.</string>
     <string name="done">Готово</string>
     <string name="list_direction">Отображение заметок</string>
     <string name="direction_normal">Сверху вниз, слева направо</string>
@@ -79,4 +79,12 @@
     <string name="swipe_discard_exit">Выйти без сохранения</string>
     <string name="swipe_discard_list">В список заметок без сохранения</string>
     <string name="swipe_discard_help">Без сохранения: восстановить текст на момент открытия заметки или убрать новую заметку.</string>
+    <string name="copy_note">Копировать заметку</string>
+    <string name="note_copied">Заметка скопирована</string>
+    <string name="copy_button_action">Действие кнопки копирования</string>
+    <string name="copy_delete_exit">Копировать, удалить и выйти из приложения</string>
+    <string name="copy_stay">Копировать и остаться в редакторе</string>
+    <string name="copy_list">Копировать и перейти к списку заметок</string>
+    <string name="copy_delete_list">Копировать, удалить и перейти к списку заметок</string>
+    <string name="copy_exit">Копировать и выйти из приложения</string>
 </resources>

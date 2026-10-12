@@ -1,6 +1,14 @@
 package com.simprel.notes
 
 fun main() {
+    check(copyAction("copy_delete_exit") == CopyAction(true, "exit"))
+    check(copyAction("copy_stay") == CopyAction(false, "editor"))
+    check(copyAction("copy_list") == CopyAction(false, "list"))
+    check(copyAction("copy_delete_list") == CopyAction(true, "list"))
+    check(copyAction("copy_exit") == CopyAction(false, "exit"))
+    check(copyAction("unknown") == copyAction("copy_delete_exit"))
+    println("PASS: all copy destinations, deletion flags and default fallback")
+
     fun visibleWhitespace(source: String): List<Int> = editorWhitespace(source).indices.filter { editorWhitespace(source)[it] }
     check(visibleWhitespace("word ") == listOf(4))
     check(visibleWhitespace("word  ") == listOf(4, 5))

@@ -82,6 +82,7 @@ class SmokeTests : Instrumentation() {
                 check(compact[0].bottom == 700)
                 check(compact[1].bottom == compact[0].top)
                 grid.reverse = false
+                grid.requestLayout()
                 grid.measure(measure, viewport); grid.layout(0, 0, 400, grid.measuredHeight)
                 check(compact[0].top == 0 && compact[0].bottom == compact[1].top)
                 // Only the outer compact-list contour rounds; row joints stay filled.

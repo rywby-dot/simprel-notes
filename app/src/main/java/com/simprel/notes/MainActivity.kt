@@ -307,6 +307,7 @@ class MainActivity : Activity() {
         tool("delete", str(R.string.delete_current)) { delete(note, "confirm_editor") {
             if (pref("delete_action", "exit") == "exit") exitApp() else leaveEditor()
         } }
+        tool("copy", str(R.string.copy_note)) { copyEditor(pref("copy_action", "copy_delete_exit")) }
         tool("check", str(R.string.done)) {
             if (persist()) { if (pref("done_action", "exit") == "exit") exitApp() else leaveEditor() }
         }
@@ -376,6 +377,23 @@ class MainActivity : Activity() {
             }
         }
     }
+    private fun copyText(text: String) {
+        (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+            .setPrimaryClip(ClipData.newPlainText(str(R.string.note_hint), text))
+        if (android.os.Build.VERSION.SDK_INT < 33) Toast.makeText(this, str(R.string.note_copied), Toast.LENGTH_SHORT).show()
+    }
+    private fun copyEditor(behavior: String) {
+        val note = current ?: return
+        val action = copyAction(behavior)
+        fun afterCopy() {
+            when (action.destination) {
+                "exit" -> exitApp()
+                "list" -> leaveEditor()
+            }
+        }
+        if (action.delete) delete(note, "confirm_editor", copy = true) { afterCopy() }
+        else if (persist()) { copyText(note.text); afterCopy() }
+    }
     private fun exitApp() { hideKeyboard(); finishAndRemoveTask() }
     private fun leaveEditor() {
         if (settling || !persist()) return
@@ -402,7 +420,7 @@ class MainActivity : Activity() {
         listPage?.submit()
         return true
     }
-    private fun settleEditor(dismiss: Boolean, exit: Boolean = false, left: Boolean = exit) {
+    private fun settleEditor(dismiss: Boolean, exit: Boolean = false, left: Boolean = exit, restored: (() -> Unit)? = null) {
         val page = overlay ?: return
         settling = true
         pendingList = dismiss && !exit
@@ -427,6 +445,7 @@ class MainActivity : Activity() {
                     editor.requestFocus()
                     (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT)
                 }
+                restored?.invoke()
             }
         }.start()
     }
@@ -593,6 +612,11 @@ class MainActivity : Activity() {
                 val distance = overlay?.translationX ?: 0f
                 val action = if (event.actionMasked == MotionEvent.ACTION_UP) editorSwipeAction(distance, host.width.toFloat(), velocity?.xVelocity ?: 0f, resources.displayMetrics.density) else 0
                 val behavior = if (action < 0) pref("left_swipe_action", "save_exit") else "save_list"
+                if (action < 0 && behavior.startsWith("copy_")) {
+                    resetGesture()
+                    settleEditor(false, restored = { copyEditor(behavior) })
+                    return true
+                }
                 val completed = action != 0 && (if (behavior == "discard_exit" || behavior == "discard_list") discardEditorChanges() else persist())
                 resetGesture()
                 settleEditor(completed, exit = completed && action < 0 && behavior != "discard_list", left = action < 0)
@@ -664,8 +688,9 @@ class MainActivity : Activity() {
         panel.animate().alpha(1f).translationY(0f).setDuration(180).start()
         undoTimeout = Runnable { clearUndo() }.also { undoHandler.postDelayed(it, remaining) }
     }
-    private fun delete(note: Note, type: String, after: () -> Unit) {
+    private fun delete(note: Note, type: String, copy: Boolean = false, after: () -> Unit) {
         fun perform() {
+            if (copy) copyText(note.text)
             val index = store.notes.indexOfFirst { it.id == note.id }
             if (index >= 0) store.notes.removeAt(index)
             if (persist()) {
@@ -792,6 +817,10 @@ class MainActivity : Activity() {
             if (cardCompact()) content.isSingleLine = true
             addView(content, FrameLayout.LayoutParams(-1, -1))
             cross.tag = "note-delete-badge"
+            if (!preview) cross.setOnLongClickListener {
+                store.notes.find { it.id == id }?.let { delete(it, "confirm_quick", copy = true) { listPage?.submit() } }
+                true
+            }
             addView(cross, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.TOP or Gravity.END))
             setOnClickListener { if (!preview && screen == "list") store.notes.find { it.id == id }?.let { open(it, animated = true) } }
             update(note)
@@ -1114,7 +1143,11 @@ class MainActivity : Activity() {
         label(R.string.editor_buttons)
         choice(R.string.delete_button_action, "delete_action", arrayOf("exit", "list"), intArrayOf(R.string.exit_app, R.string.return_to_list), "exit")
         choice(R.string.done_button_action, "done_action", arrayOf("exit", "list"), intArrayOf(R.string.exit_app, R.string.return_to_list), "exit")
-        choice(R.string.left_swipe_action, "left_swipe_action", arrayOf("save_exit", "discard_exit", "discard_list"), intArrayOf(R.string.swipe_save_exit, R.string.swipe_discard_exit, R.string.swipe_discard_list), "save_exit")
+        val copyValues = arrayOf("copy_delete_exit", "copy_stay", "copy_list", "copy_delete_list", "copy_exit")
+        val copyLabels = intArrayOf(R.string.copy_delete_exit, R.string.copy_stay, R.string.copy_list, R.string.copy_delete_list, R.string.copy_exit)
+        choice(R.string.copy_button_action, "copy_action", copyValues, copyLabels, "copy_delete_exit")
+        choice(R.string.left_swipe_action, "left_swipe_action", arrayOf("save_exit", "discard_exit", "discard_list") + copyValues,
+            intArrayOf(R.string.swipe_save_exit, R.string.swipe_discard_exit, R.string.swipe_discard_list) + copyLabels, "save_exit")
         description(R.string.swipe_discard_help)
         label(R.string.always_delete)
         toggle(R.string.always_delete, "always_delete", alwaysDelete()) { quickDelete = false }
@@ -1137,7 +1170,7 @@ class MainActivity : Activity() {
         fun resetDefaults() {
                 val edit = store.prefs.edit()
                 listOf("rounding", "border_width", "text_padding", "language", "list_direction",
-                    "delete_action", "done_action", "always_delete", "theme", "accent",
+                    "delete_action", "done_action", "copy_action", "always_delete", "theme", "accent",
                     "confirm_editor", "confirm_drag", "confirm_quick", "markdown", "start", "layout",
                     "text_scale", "undo_editor", "undo_drag", "undo_quick", "undo_seconds", "left_swipe_action")
                     .forEach { edit.remove(it) }
@@ -1201,6 +1234,7 @@ private class Glyph(context: android.content.Context, var kind: String, var ink:
             "back" -> { line(19f,12f,5f,12f); line(5f,12f,12f,5f); line(5f,12f,12f,19f) }
             "check" -> { line(4f,12f,9f,17f); line(9f,17f,20f,6f) }
             "delete" -> { line(4f,6f,20f,6f); line(9f,3f,15f,3f); canvas.drawRoundRect(6f,6f,18f,21f,2f,2f,paint); line(10f,10f,10f,17f); line(14f,10f,14f,17f) }
+            "copy" -> { canvas.drawRoundRect(8f,8f,20f,21f,2f,2f,paint); line(16f,4f,4f,4f); line(4f,4f,4f,17f) }
             "close" -> { line(8f,8f,16f,16f); line(8f,16f,16f,8f) }
             "add" -> { line(12f,5f,12f,19f); line(5f,12f,19f,12f) }
             "grid" -> { for (x in listOf(4f,14f)) for (y in listOf(4f,14f)) canvas.drawRoundRect(x,y,x+6f,y+6f,1f,1f,paint) }

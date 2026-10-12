@@ -89,3 +89,14 @@ fun editorSwipeAction(distance: Float, width: Float, velocity: Float, density: F
     val direction = if (distance < 0f) -1 else 1
     return if (shouldDismissEditor(kotlin.math.abs(distance), width, velocity * direction, density)) direction else 0
 }
+
+/** Shared destinations for the copy button and the editor's left swipe. */
+data class CopyAction(val delete: Boolean, val destination: String)
+
+fun copyAction(value: String): CopyAction = when (value) {
+    "copy_stay" -> CopyAction(false, "editor")
+    "copy_list" -> CopyAction(false, "list")
+    "copy_delete_list" -> CopyAction(true, "list")
+    "copy_exit" -> CopyAction(false, "exit")
+    else -> CopyAction(true, "exit")
+}

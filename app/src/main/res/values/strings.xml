@@ -41,7 +41,7 @@
     <string name="russian">Russian</string>
     <string name="english">English</string>
     <string name="always_delete">Always show delete buttons</string>
-    <string name="always_delete_help">Always show a delete cross on every note. Uses the confirmation setting for crosses in the list.</string>
+    <string name="always_delete_help">Always show a delete cross on every note. Hold a cross to copy and delete. Uses the confirmation setting for crosses in the list.</string>
     <string name="done">Done</string>
     <string name="list_direction">Notes layout</string>
     <string name="direction_normal">Top to bottom, left to right</string>
@@ -79,4 +79,12 @@
     <string name="swipe_discard_exit">Exit without saving</string>
     <string name="swipe_discard_list">Go to the notes list without saving</string>
     <string name="swipe_discard_help">Without saving: restore the text from when the note was opened, or discard a new note.</string>
+    <string name="copy_note">Copy note</string>
+    <string name="note_copied">Note copied</string>
+    <string name="copy_button_action">Copy button action</string>
+    <string name="copy_delete_exit">Copy, delete and exit the app</string>
+    <string name="copy_stay">Copy and stay in the editor</string>
+    <string name="copy_list">Copy and go to the notes list</string>
+    <string name="copy_delete_list">Copy, delete and go to the notes list</string>
+    <string name="copy_exit">Copy and exit the app</string>
 </resources>
