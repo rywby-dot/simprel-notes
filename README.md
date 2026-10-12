@@ -1,7 +1,7 @@
 AI Made
 Fully vibecode
 
-Simprel-Notes is simple note app for android. Without internet, without cloud, without slop, fast and minimal
+Simprel-Notes is simple note app for android. Without internet, without cloud, without slop, fast and minimal. With markdown. Opens fast, recommend to use with phone's action button (I use nothing essential key)
 
 
 https://github.com/user-attachments/assets/7d7d8a39-85d2-40f7-8ef1-f9e08953652d
