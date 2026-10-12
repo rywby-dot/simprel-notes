@@ -8,9 +8,7 @@ install [here.](https://github.com/rywby-dot/simprel-notes/releases/download/v1.
 
 https://github.com/user-attachments/assets/dc20ec21-9430-48db-b4a3-ad1d3d3a9b4f
 
-<img width="1152" height="2560" alt="photo_2026-10-12_19-50-05" src="https://github.com/user-attachments/assets/cff070a4-dc8a-46e9-a297-789deca0296a" />
-<img width="1152" height="2560" alt="photo_2026-10-12_19-50-09" src="https://github.com/user-attachments/assets/5d095bae-7b43-4f88-a8c5-d7c51105b1f2" />
-<img width="1152" height="2560" alt="photo_2026-10-12_19-50-13" src="https://github.com/user-attachments/assets/ddc3ad0c-02f0-498e-8eb4-913758e7588f" />
+<img width="288" height="640" alt="photo_2026-10-12_19-50-05" src="https://github.com/user-attachments/assets/cff070a4-dc8a-46e9-a297-789deca0296a" /> <img width="288" height="640" alt="photo_2026-10-12_19-50-09" src="https://github.com/user-attachments/assets/5d095bae-7b43-4f88-a8c5-d7c51105b1f2" /> <img width="288" height="640" alt="photo_2026-10-12_19-50-13" src="https://github.com/user-attachments/assets/ddc3ad0c-02f0-498e-8eb4-913758e7588f" />
 
 ## Build
 
