@@ -100,3 +100,24 @@ fun copyAction(value: String): CopyAction = when (value) {
     "copy_exit" -> CopyAction(false, "exit")
     else -> CopyAction(true, "exit")
 }
+
+/** The active filter is session state; only the order of the last two modes is a preference. */
+fun nextReminderFilter(current: String, withoutFirst: Boolean): String {
+    val order = if (withoutFirst) listOf("all", "without", "with") else listOf("all", "with", "without")
+    return order[(order.indexOf(current).coerceAtLeast(0) + 1) % order.size]
+}
+
+fun matchesReminderFilter(filter: String, hasReminder: Boolean): Boolean = when (filter) {
+    "with" -> hasReminder
+    "without" -> !hasReminder
+    else -> true
+}
+
+/** Reorder just the visible slots, keeping hidden notes and their canonical positions. */
+fun reorderFilteredNotes(notes: List<Note>, ids: List<String>, visibleIds: Set<String>): List<Note>? {
+    if (ids.size != visibleIds.size || ids.toSet() != visibleIds) return null
+    val byId = notes.associateBy { it.id }
+    if (byId.size != notes.size || !byId.keys.containsAll(visibleIds)) return null
+    val reordered = ids.iterator()
+    return notes.map { if (it.id in visibleIds) byId.getValue(reordered.next()) else it }
+}

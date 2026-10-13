@@ -61,6 +61,7 @@ class MainActivity : Activity() {
     }
     private var screen = "list"
     private var quickDelete = false
+    private var reminderFilter = "all"
     private var backgrounded = true
     private var preparingBackground = false
     private val createdNoteIds = mutableSetOf<String>()
@@ -77,7 +78,7 @@ class MainActivity : Activity() {
     private var accent = 0
     private var darkTheme = false
     private var restored: ScreenState? = null
-    private data class ScreenState(val screen: String, val note: Note?, val quick: Boolean, val returning: Boolean, val createdIds: Set<String>, val draft: EditorDraft?)
+    private data class ScreenState(val screen: String, val note: Note?, val quick: Boolean, val returning: Boolean, val createdIds: Set<String>, val draft: EditorDraft?, val filter: String)
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun pref(key: String, fallback: String) = store.prefs.getString(key, fallback) ?: fallback
     private fun textScale() = store.prefs.getInt("text_scale", 100).coerceIn(50, 400) / 100f
@@ -122,15 +123,29 @@ class MainActivity : Activity() {
         restored?.let { createdNoteIds.addAll(it.createdIds) }
         if (android.os.Build.VERSION.SDK_INT >= 33) onBackInvokedDispatcher.registerOnBackInvokedCallback(0) { back() }
     }
+    private val reminderChanges = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: android.content.Intent) {
+            current?.takeIf { screen == "editor" && !backgrounded && !preparingBackground }?.let { Reminders.seen(this@MainActivity, it) }
+            listPage?.submit()
+        }
+    }
     override fun onStart() {
         super.onStart()
         restoreForeground()
+        val filter = android.content.IntentFilter("$packageName.REMINDERS_CHANGED")
+        if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(reminderChanges, filter, Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(reminderChanges, filter)
     }
     override fun onResume() {
         super.onResume()
         restoreForeground()
         preparingBackground = false
-        if (ready) { focusEditor(); showPendingUndo() }
+        if (ready) {
+            Reminders.sync(this, store.notes, force = true)
+            if (!openReminderIntent()) focusEditor()
+            current?.takeIf { screen == "editor" }?.let { Reminders.seen(this, it) }
+            listPage?.submit(); showPendingUndo()
+        }
     }
     private fun restoreForeground() {
         if (!ready) return
@@ -141,6 +156,7 @@ class MainActivity : Activity() {
             val previous = restored
             restored = null
             if (previous != null && !previous.returning) {
+                reminderFilter = previous.filter
                 quickDelete = previous.quick
                 when (previous.screen) {
                     "settings" -> settings()
@@ -153,6 +169,7 @@ class MainActivity : Activity() {
                 host.visibility = View.VISIBLE
                 return
             }
+            reminderFilter = "all"
             if (pref("start", "new") != "previous") quickDelete = false
             when (pref("start", "new")) {
                 "previous" -> {
@@ -170,10 +187,11 @@ class MainActivity : Activity() {
         }
     }
     override fun onDestroy() {
+        reminderDialog?.dismiss()
         undoTimeout?.let { undoHandler.removeCallbacks(it) }
         super.onDestroy()
     }
-    override fun onRetainNonConfigurationInstance(): Any = ScreenState(screen, current, quickDelete, backgrounded, createdNoteIds.toSet(), editorDraft)
+    override fun onRetainNonConfigurationInstance(): Any = ScreenState(screen, current, quickDelete, backgrounded, createdNoteIds.toSet(), editorDraft, reminderFilter)
     override fun onPause() {
         preparingBackground = true
         if (ready) {
@@ -197,14 +215,116 @@ class MainActivity : Activity() {
                 getSystemService(android.app.UiModeManager::class.java).setApplicationNightMode(mode)
             }
         }
-        backgrounded = !isChangingConfigurations
+        backgrounded = !isChangingConfigurations && reminderDialog?.isShowing != true
         super.onPause()
     }
-    override fun onStop() { if (ready) persist(); super.onStop() }
+    override fun onStop() { unregisterReceiver(reminderChanges); if (ready) persist(); super.onStop() }
     @Deprecated("Used on Android 12 and older")
     override fun onBackPressed() { back() }
     private fun persist(): Boolean = try { store.save(); true } catch (_: Exception) {
         Toast.makeText(this, str(R.string.save_error), Toast.LENGTH_LONG).show(); false
+    }
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent); setIntent(intent)
+        if (ready && !backgrounded) openReminderIntent()
+    }
+    private fun openReminderIntent(): Boolean {
+        val id = intent.getStringExtra("note_id") ?: return false
+        intent.removeExtra("note_id")
+        val note = store.notes.find { it.id == id } ?: return false
+        reminderDialog?.dismiss()
+        open(note)
+        return true
+    }
+    private var reminderDialog: android.app.Dialog? = null
+    private fun chooseReminder(note: Note) {
+        hideKeyboard()
+        if (note.text.isBlank()) { Toast.makeText(this, str(R.string.reminder_empty), Toast.LENGTH_SHORT).show(); return }
+        val now = java.time.ZonedDateTime.now()
+        val first = now.toLocalDate()
+        val dates = reminderDates(now)
+        val locale = (localized ?: this).resources.configuration.locales[0]
+        val initial = if (note.reminderAt > System.currentTimeMillis()) java.time.Instant.ofEpochMilli(note.reminderAt).atZone(now.zone) else now.plusMinutes(1)
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(24), dp(16), dp(16)) }
+        panel.addView(TextView(this).apply { text = str(R.string.reminder); textSize = 24f * textScale(); setTextColor(fg); setPadding(dp(8), 0, dp(8), dp(12)) })
+        val wheels = LinearLayout(this)
+        fun wheel(max: Int, value: Int, labels: Array<String>, cyclic: Boolean, description: Int, weight: Float): NumberPicker {
+            val picker = NumberPicker(ContextThemeWrapper(this, if (darkTheme) android.R.style.Theme_Material_Dialog else android.R.style.Theme_Material_Light_Dialog)).apply {
+                minValue = 0; maxValue = max; displayedValues = labels; this.value = value.coerceIn(0, max)
+                wrapSelectorWheel = cyclic; descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                contentDescription = str(description)
+                if (android.os.Build.VERSION.SDK_INT >= 29) { textColor = fg; textSize = 18f * resources.displayMetrics.scaledDensity * textScale(); selectionDividerHeight = dp(2) }
+            }
+            wheels.addView(picker, LinearLayout.LayoutParams(0, dp(192), weight))
+            return picker
+        }
+        val day = wheel(dates.lastIndex, dates.indexOf(initial.toLocalDate()), dates.mapIndexed { index, date ->
+            when (index) { 0 -> str(R.string.today); 1 -> str(R.string.tomorrow); else -> date.format(java.time.format.DateTimeFormatter.ofPattern(if (date.year != first.year || date.month != first.month) "d MMM" else "d", locale)) }
+        }.toTypedArray(), false, R.string.reminder_day, 2f)
+        val hour = wheel(23, initial.hour, Array(24) { "%02d".format(it) }, true, R.string.reminder_hour, 1f)
+        val minute = wheel(59, initial.minute, Array(60) { "%02d".format(it) }, true, R.string.reminder_minute, 1f)
+        panel.addView(wheels)
+        val buttons = LinearLayout(this).apply { gravity = Gravity.END }
+        val dialog = android.app.Dialog(this)
+        fun button(label: Int, filled: Boolean = false, action: () -> Unit) {
+            buttons.addView(TextView(this).apply {
+                text = str(label); textSize = 14f * textScale(); gravity = Gravity.CENTER; minHeight = dp(48); isFocusable = true
+                setTextColor(if (filled) bg else accent); setPadding(dp(8), dp(12), dp(8), dp(12))
+                background = android.graphics.drawable.RippleDrawable(ColorStateList.valueOf(outline), shape(if (filled) accent else Color.TRANSPARENT, 24), shape(Color.WHITE, 24))
+                setOnClickListener { action() }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        fun set(exit: Boolean) {
+            val selected = reminderTime(dates[day.value], hour.value, minute.value, java.time.ZonedDateTime.now())
+            if (selected == null) {
+                Toast.makeText(this, str(R.string.reminder_invalid), Toast.LENGTH_LONG).show(); return
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                val access = getSharedPreferences("reminders", MODE_PRIVATE)
+                if (!access.getBoolean("notification_requested", false) || shouldShowRequestPermissionRationale(android.Manifest.permission.POST_NOTIFICATIONS)) {
+                    access.edit().putBoolean("notification_requested", true).apply()
+                    requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 20); return
+                }
+            }
+            val manager = getSystemService(android.app.NotificationManager::class.java)
+            val alarms = getSystemService(android.app.AlarmManager::class.java)
+            if (!manager.areNotificationsEnabled() || (android.os.Build.VERSION.SDK_INT >= 31 && !alarms.canScheduleExactAlarms())) {
+                AlertDialog.Builder(this).setTitle(str(R.string.reminder_access)).setMessage(str(R.string.reminder_access_help))
+                    .setNegativeButton(str(R.string.cancel), null).setPositiveButton(str(R.string.open_settings)) { _, _ ->
+                        val action = if (!manager.areNotificationsEnabled()) android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS else android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM
+                        startActivity(android.content.Intent(action).setData(android.net.Uri.parse("package:$packageName")).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName))
+                    }.show(); return
+            }
+            val previous = note.reminderAt
+            note.reminderAt = selected
+            if (!persist()) { note.reminderAt = previous; return }
+            listPage?.submit(); dialog.dismiss()
+            if (exit) exitApp()
+        }
+        button(R.string.cancel) { dialog.dismiss() }
+        button(R.string.set_reminder) { set(false) }
+        button(R.string.set_exit, true) { set(true) }
+        // Keep whole words readable in the three-button row, including enlarged Russian text.
+        buttons.addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ ->
+            if (right - left != oldRight - oldLeft) {
+                val desired = 14f * resources.displayMetrics.scaledDensity * textScale()
+                val paint = android.text.TextPaint().apply { textSize = desired }
+                val labels = (0 until buttons.childCount).map { buttons.getChildAt(it) as TextView }
+                val fitted = labels.minOf { label ->
+                    val longest = label.text.toString().split(' ').maxOf { paint.measureText(it) }.coerceAtLeast(1f)
+                    desired * (label.width - label.paddingLeft - label.paddingRight).coerceAtLeast(1) / longest
+                }.coerceAtMost(desired)
+                labels.forEach { it.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, fitted) }
+            }
+        }
+        panel.addView(buttons)
+        dialog.setContentView(panel)
+        dialog.window?.setBackgroundDrawable(shape(surface, 28))
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        dialog.setOnDismissListener { if (reminderDialog === dialog) reminderDialog = null }
+        reminderDialog = dialog
+        dialog.show()
+        dialog.window?.setLayout(minOf(resources.displayMetrics.widthPixels - dp(32), dp(480)), -2)
     }
     private fun colors() {
         val dark = when (pref("theme", "system")) {
@@ -299,11 +419,13 @@ class MainActivity : Activity() {
     }
     private fun hideKeyboard() { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(host.windowToken, 0) }
     private fun open(note: Note, interactive: Boolean = false, animated: Boolean = false) {
-        editorDraft = EditorDraft(note.id, note.text, store.notes.indexOfFirst { it.id == note.id && it.text.isNotBlank() }, pref("last", ""))
+        editorDraft = EditorDraft(note.id, note.text, store.notes.indexOfFirst { it.id == note.id && it.text.isNotBlank() }, pref("last", ""), note.reminderAt)
+        Reminders.seen(this, note)
         current = note; screen = "editor"; quickDelete = false
         store.prefs.edit().putString("last", note.id).apply()
         frame(interactive)
         tool("back", str(R.string.all_notes)) { leaveEditor() }; spacer()
+        tool("alarm", str(R.string.reminder)) { chooseReminder(note) }
         tool("delete", str(R.string.delete_current)) { delete(note, "confirm_editor") {
             if (pref("delete_action", "exit") == "exit") exitApp() else leaveEditor()
         } }
@@ -363,14 +485,14 @@ class MainActivity : Activity() {
         if (interactive || preparingBackground) { editor.clearFocus(); host.isFocusableInTouchMode = true; host.requestFocus() }
         else editor.requestFocus()
         if (animated) presentOverlay(1)
-        editor.post { if (!interactive && !animated && !preparingBackground && screen == "editor" && current?.id == note.id) (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT) }
+        editor.post { if (reminderDialog?.isShowing != true && !interactive && !animated && !preparingBackground && screen == "editor" && current?.id == note.id) (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT) }
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus && !preparingBackground && screen == "editor" && !settling && !gestureActive && listGestureMode == 0) activeEditor?.let { editor ->
+        if (hasFocus && reminderDialog?.isShowing != true && !preparingBackground && screen == "editor" && !settling && !gestureActive && listGestureMode == 0) activeEditor?.let { editor ->
             editor.requestFocus()
             editor.post {
-                if (!preparingBackground && activeEditor === editor && screen == "editor" && !settling && !gestureActive && listGestureMode == 0) {
+                if (reminderDialog?.isShowing != true && !preparingBackground && activeEditor === editor && screen == "editor" && !settling && !gestureActive && listGestureMode == 0) {
                     if (android.os.Build.VERSION.SDK_INT >= 30) window.insetsController?.show(WindowInsets.Type.ime())
                     else @Suppress("DEPRECATION") (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT)
                 }
@@ -410,6 +532,7 @@ class MainActivity : Activity() {
         createdNoteIds.remove(note.id)
         // Keep the EditText binding usable if Android interrupts the exit animation.
         note.text = if (draft.index >= 0) draft.text else ""
+        note.reminderAt = if (draft.index >= 0) draft.reminderAt else 0
         val restoredIndex = store.notes.indexOfFirst { it.id == note.id }
         if (restoredIndex >= 0) store.notes[restoredIndex] = note
         current = null
@@ -460,10 +583,11 @@ class MainActivity : Activity() {
         }.start()
     }
     private fun focusEditor() {
+        if (reminderDialog?.isShowing == true) return
         if (screen != "editor" || preparingBackground) return
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE)
         activeEditor?.let { editor -> editor.requestFocus(); editor.post {
-            if (!preparingBackground && activeEditor === editor && !settling && listGestureMode == 0) (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT)
+            if (reminderDialog?.isShowing != true && !preparingBackground && activeEditor === editor && !settling && listGestureMode == 0) (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT)
         } }
     }
     private fun leaveSettings() { if (!settling) settleSettings(true) }
@@ -663,7 +787,14 @@ class MainActivity : Activity() {
             textSize = 14f; gravity = Gravity.CENTER
             minHeight = dp(48); minWidth = dp(64); setPadding(dp(12), dp(8), dp(12), dp(8)); isFocusable = true
             setOnClickListener {
-                val note = Note(entry.getString("id"), entry.getString("text"))
+                if (entry.optString("kind") == "reminder") {
+                    val note = store.notes.find { it.id == entry.getString("id") }
+                    if (note == null || note.reminderAt != 0L) { clearUndo(); return@setOnClickListener }
+                    note.reminderAt = entry.getLong("reminderAt")
+                    if (persist()) { clearUndo(); listPage?.submit() } else note.reminderAt = 0
+                    return@setOnClickListener
+                }
+                val note = Note(entry.getString("id"), entry.getString("text"), entry.optLong("reminderAt"))
                 val index = entry.optInt("index").coerceIn(0, store.notes.size)
                 val inserted = store.notes.none { it.id == note.id }
                 if (inserted) store.notes.add(index, note)
@@ -676,7 +807,7 @@ class MainActivity : Activity() {
         panel.addView(undo, LinearLayout.LayoutParams(-2, -2))
         undoAppearance = {
             panel.background = shape(if (pref("theme", "system") == "amoled") bg else surface, 12, border = true)
-            message.text = str(R.string.note_deleted); message.setTextColor(fg)
+            message.text = str(if (entry.optString("kind") == "reminder") R.string.reminder_deleted else R.string.note_deleted); message.setTextColor(fg)
             undo.text = str(R.string.undo); undo.setTextColor(accent)
             undo.background = android.graphics.drawable.RippleDrawable(ColorStateList.valueOf((accent and 0xFFFFFF) or 0x22000000), null, shape(Color.WHITE, 12))
         }
@@ -698,7 +829,7 @@ class MainActivity : Activity() {
                 val undoEnabled = index >= 0 && note.text.isNotBlank() && store.prefs.getBoolean(type.replace("confirm_", "undo_"), true)
                 if (index >= 0) clearUndo()
                 if (undoEnabled) {
-                    val entry = org.json.JSONObject().put("id", note.id).put("text", note.text).put("index", index)
+                    val entry = org.json.JSONObject().put("id", note.id).put("text", note.text).put("reminderAt", note.reminderAt).put("index", index)
                         .put("editor", type == "confirm_editor").put("expires", System.currentTimeMillis() + store.prefs.getInt("undo_seconds", 4).coerceIn(1, 10) * 1000L)
                     store.prefs.edit().putString("pending_undo", entry.toString()).commit()
                     after()
@@ -731,14 +862,38 @@ class MainActivity : Activity() {
         ensureList().updateDeleteControls()
         host.isFocusableInTouchMode = true; host.requestFocus()
     }
+    private fun visibleNotes() = store.notes.filter { it.text.isNotBlank() && matchesReminderFilter(reminderFilter, Reminders.hasReminder(this, it)) }
+    private fun removeReminder(note: Note) {
+        fun perform() {
+            val previous = note.reminderAt
+            if (previous <= 0) return
+            note.reminderAt = 0
+            if (!persist()) { note.reminderAt = previous; return }
+            clearUndo()
+            listPage?.submit()
+            if (store.prefs.getBoolean("undo_reminder", true)) {
+                val entry = org.json.JSONObject().put("kind", "reminder").put("id", note.id).put("reminderAt", previous)
+                    .put("expires", System.currentTimeMillis() + store.prefs.getInt("undo_seconds", 4).coerceIn(1, 10) * 1000L)
+                store.prefs.edit().putString("pending_undo", entry.toString()).commit()
+                showPendingUndo()
+            }
+        }
+        if (!flag("confirm_reminder")) { perform(); return }
+        confirmation = AlertDialog.Builder(ContextThemeWrapper(this, if (darkTheme) android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert))
+            .setTitle(str(R.string.remove_reminder_question)).setMessage(note.text.take(180))
+            .setNegativeButton(str(R.string.cancel), null).setPositiveButton(str(R.string.delete)) { _, _ -> perform() }
+            .setOnDismissListener { confirmation = null }.show().also { dialog ->
+                dialog.window?.setBackgroundDrawable(shape(surface, 28))
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(accent)
+                dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(accent)
+                dialog.window?.decorView?.let { scaleText(it) }
+            }
+    }
     private fun reorder(ids: List<String>): Boolean {
         val previous = store.notes.toList()
-        val visible = previous.filter { it.text.isNotBlank() }
-        if (ids.size != visible.size || ids.toSet() != visible.map { it.id }.toSet()) return false
-        val byId = visible.associateBy { it.id }
+        val reordered = reorderFilteredNotes(previous, ids, visibleNotes().map { it.id }.toSet()) ?: return false
         store.notes.clear()
-        store.notes.addAll(ids.map { byId.getValue(it) })
-        store.notes.addAll(previous.filter { it.text.isBlank() })
+        store.notes.addAll(reordered)
         if (!persist()) { store.notes.clear(); store.notes.addAll(previous); return false }
         listPage?.submit()
         return true
@@ -751,6 +906,18 @@ class MainActivity : Activity() {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         private val id = note.id
+        private var hasReminder = Reminders.hasReminder(this@MainActivity, note)
+        private val alarmBadge = icon("alarm-small", str(R.string.reminder)) {
+            store.notes.find { it.id == id }?.let { chooseReminder(it) }
+        }.apply {
+            tag = "note-reminder-badge"
+            setOnLongClickListener {
+                store.notes.find { it.id == this@NoteCard.id }?.let { note ->
+                    removeReminder(note)
+                }
+                true
+            }
+        }
         private var cardRadius = 0f
         private val textClip = Path()
         private fun updateGeometry() {
@@ -763,7 +930,7 @@ class MainActivity : Activity() {
             content.gravity = if (cardCompact()) Gravity.CENTER_VERTICAL else Gravity.TOP
             content.isSingleLine = cardCompact()
             val padding = (store.prefs.getFloat("text_padding", 12f).coerceIn(0f, 50f) * resources.displayMetrics.density).toInt()
-            content.setPadding(padding, if (cardCompact()) 0 else padding, if (cardCompact() && badgeEnabled()) maxOf(padding, dp(42)) else padding, if (cardCompact()) 0 else padding)
+            content.setPadding(padding, if (cardCompact()) 0 else padding, if (cardCompact() && (badgeEnabled() || hasReminder)) maxOf(padding, dp(if (hasReminder && badgeEnabled()) 90 else 42)) else padding, if (cardCompact()) 0 else padding)
             content.maxLines = if (cardCompact()) 1 else ((height - content.paddingTop - content.paddingBottom) / content.lineHeight.coerceAtLeast(1)).coerceAtLeast(1)
             content.cornerRadius = cardRadius
             content.compact = cardCompact()
@@ -784,6 +951,14 @@ class MainActivity : Activity() {
                 val y = (center.second - dp(14)).toInt()
                 cross.layout(x, y, x + dp(28), y + dp(28))
             }
+            if (cardCompact()) {
+                val end = width - dp(if (badgeEnabled()) 56 else 8)
+                alarmBadge.layout(end - dp(28), (height - dp(28)) / 2, end, (height + dp(28)) / 2)
+            } else alarmBadge.layout(cross.left, height - cross.bottom, cross.right, height - cross.top)
+            content.reminderVisible = hasReminder
+            content.reminderLeft = alarmBadge.left - dp(3).toFloat()
+            content.reminderTop = alarmBadge.top - dp(3).toFloat()
+            content.geometryChanged()
             val badgeLeft = cross.left - dp(3).toFloat()
             val badgeBottom = cross.bottom + dp(3).toFloat()
             if (content.badgeLeft != badgeLeft || content.badgeBottom != badgeBottom) {
@@ -816,6 +991,7 @@ class MainActivity : Activity() {
             content.setPadding(dp(18), if (cardCompact()) 0 else dp(18), if (badgeEnabled()) dp(48) else dp(18), if (cardCompact()) 0 else dp(18))
             if (cardCompact()) content.isSingleLine = true
             addView(content, FrameLayout.LayoutParams(-1, -1))
+            addView(alarmBadge, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.BOTTOM or Gravity.END))
             cross.tag = "note-delete-badge"
             if (!preview) cross.setOnLongClickListener {
                 store.notes.find { it.id == id }?.let { delete(it, "confirm_quick", copy = true) { listPage?.submit() } }
@@ -830,6 +1006,15 @@ class MainActivity : Activity() {
             }
         }
         fun update(note: Note) {
+            hasReminder = Reminders.hasReminder(this@MainActivity, note)
+            alarmBadge.visibility = if (hasReminder) View.VISIBLE else View.GONE
+            val unread = Reminders.unread(this@MainActivity, note)
+            (alarmBadge as Glyph).ink = if (unread) Color.parseColor(if (darkTheme) "#FFD8B0" else "#75451F") else accent
+            alarmBadge.background = android.graphics.drawable.RippleDrawable(ColorStateList.valueOf(outline),
+                NoteSurfaceDrawable(if (unread) Color.parseColor(if (darkTheme) "#704B2E" else "#F1CDAA") else surface, dp(100).toFloat(), noteBorderWidth(), outline), shape(Color.WHITE, 100))
+            val time = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT, (localized ?: this@MainActivity).resources.configuration.locales[0]).format(java.util.Date(note.reminderAt))
+            alarmBadge.contentDescription = str(R.string.reminder_badge, time).let { if (unread) str(R.string.reminder_unread, it) else it }
+            alarmBadge.invalidate()
             val mode = "${cardCompact()}:${pref("markdown", "render")}:$accent"
             if (rendered != note.text || renderedMode != mode) {
                 renderedMode = mode
@@ -853,6 +1038,11 @@ class MainActivity : Activity() {
         private val reversed = pref("list_direction", "reverse") == "reverse"
         private val pageBody = FrameLayout(this@MainActivity)
         private val bin = icon("delete", str(R.string.quick_delete)) { quickDelete = !quickDelete; updateDeleteControls() }
+        private val filter = icon("filter-all", str(R.string.filter_all)) {
+            reminderFilter = nextReminderFilter(reminderFilter, flag("filter_without_first"))
+            scrollAnchor.followInsertion(reversed)
+            submit()
+        }.apply { tag = "note-reminder-filter" }
         private val empty = TextView(this@MainActivity).apply { text = str(R.string.empty_notes); setTextColor(secondary); textSize = 18f * textScale(); gravity = Gravity.CENTER }
         private val grid = AnimatedNotesGrid(this@MainActivity, { NoteCard(it) }, { view, note -> (view as NoteCard).update(note) }, { reorder(it) }).apply { reverse = reversed; compact = this@MainActivity.compact() }
         private val scrollAnchor = ListScrollAnchor()
@@ -881,6 +1071,7 @@ class MainActivity : Activity() {
             bar.addView(icon("settings", str(R.string.settings)) { settings(animated = true) }, LayoutParams(dp(48), dp(48)))
             bar.addView(View(this@MainActivity), LayoutParams(0, 1, 1f))
             bar.addView(bin, LayoutParams(dp(48), dp(48)))
+            bar.addView(filter, LayoutParams(dp(48), dp(48)))
             lateinit var mode: View
             mode = icon(if (compact()) "grid" else "list", str(if (compact()) R.string.grid_view else R.string.compact_view)) {
                 val anchor = grid.cards().filter { it.bottom >= scroll.scrollY }.minByOrNull { kotlin.math.abs(it.top - scroll.scrollY) }
@@ -972,7 +1163,12 @@ class MainActivity : Activity() {
         fun scrollPosition() = scroll.scrollY
         fun submit() {
             val atBottom = scroll.scrollY >= grid.height - scroll.height + scroll.paddingTop + scroll.paddingBottom - dp(32)
-            val notes = store.notes.filter { it.text.isNotBlank() }
+            (filter as Glyph).kind = when (reminderFilter) { "with" -> "alarm"; "without" -> "alarm-off"; else -> "filter-all" }
+            filter.contentDescription = str(when (reminderFilter) { "with" -> R.string.filter_with; "without" -> R.string.filter_without; else -> R.string.filter_all })
+            filter.isSelected = reminderFilter != "all"
+            if (android.os.Build.VERSION.SDK_INT >= 30) filter.stateDescription = filter.contentDescription
+            filter.invalidate()
+            val notes = visibleNotes()
             val newlyCreated = notes.map { it.id }.filter { it in createdNoteIds }
             val metrics = android.text.TextPaint().apply { textSize = 16f * resources.displayMetrics.scaledDensity * textScale() }.fontMetricsInt
             grid.compactRowHeight = maxOf(dp(56), 2 * (metrics.bottom - metrics.top) + dp(16))
@@ -982,6 +1178,7 @@ class MainActivity : Activity() {
             grid.submit(notes, submitted)
             grid.invalidate()
             empty.textSize = 18f * textScale()
+            empty.text = str(if (reminderFilter == "all") R.string.empty_notes else R.string.empty_filtered_notes)
             empty.visibility = if (notes.isEmpty()) View.VISIBLE else View.GONE
             val restore = if (!submitted) savedListScroll else null
             if (newlyCreated.isNotEmpty()) {
@@ -1140,6 +1337,7 @@ class MainActivity : Activity() {
         slider(R.string.text_scale, 70, (store.prefs.getInt("text_scale", 100) - 50) / 5, { "${50 + it * 5}%" }) { store.prefs.edit().putInt("text_scale", 50 + it * 5).apply() }
         choice(R.string.language, "language", arrayOf("system", "ru", "en"), intArrayOf(R.string.system, R.string.russian, R.string.english), "system")
         choice(R.string.list_direction, "list_direction", arrayOf("normal", "reverse"), intArrayOf(R.string.direction_normal, R.string.direction_reverse), "reverse")
+        toggle(R.string.filter_without_first, "filter_without_first", flag("filter_without_first"))
         label(R.string.editor_buttons)
         choice(R.string.delete_button_action, "delete_action", arrayOf("exit", "list"), intArrayOf(R.string.exit_app, R.string.return_to_list), "exit")
         choice(R.string.done_button_action, "done_action", arrayOf("exit", "list"), intArrayOf(R.string.exit_app, R.string.return_to_list), "exit")
@@ -1158,10 +1356,12 @@ class MainActivity : Activity() {
         toggle(R.string.in_editor, "confirm_editor", flag("confirm_editor"))
         toggle(R.string.by_drag, "confirm_drag", flag("confirm_drag"))
         toggle(R.string.by_cross, "confirm_quick", flag("confirm_quick"))
+        toggle(R.string.reminder, "confirm_reminder", flag("confirm_reminder"))
         label(R.string.undo_settings)
         toggle(R.string.in_editor, "undo_editor", store.prefs.getBoolean("undo_editor", true))
         toggle(R.string.by_drag, "undo_drag", store.prefs.getBoolean("undo_drag", true))
         toggle(R.string.by_cross, "undo_quick", store.prefs.getBoolean("undo_quick", true))
+        toggle(R.string.undo_reminder, "undo_reminder", store.prefs.getBoolean("undo_reminder", true))
         slider(R.string.undo_duration, 9, store.prefs.getInt("undo_seconds", 4) - 1, { str(R.string.seconds_value, it + 1) }) { store.prefs.edit().putInt("undo_seconds", it + 1).apply() }
         description(R.string.undo_exit_help)
         choice(R.string.markdown, "markdown", arrayOf("raw", "render"), intArrayOf(R.string.markdown_raw, R.string.markdown_render), "render")
@@ -1172,7 +1372,7 @@ class MainActivity : Activity() {
                 listOf("rounding", "border_width", "text_padding", "language", "list_direction",
                     "delete_action", "done_action", "copy_action", "always_delete", "theme", "accent",
                     "confirm_editor", "confirm_drag", "confirm_quick", "markdown", "start", "layout",
-                    "text_scale", "undo_editor", "undo_drag", "undo_quick", "undo_seconds", "left_swipe_action")
+                    "confirm_reminder", "undo_reminder", "filter_without_first", "text_scale", "undo_editor", "undo_drag", "undo_quick", "undo_seconds", "left_swipe_action")
                     .forEach { edit.remove(it) }
                 edit.apply()
                 quickDelete = false
@@ -1227,16 +1427,19 @@ private class Glyph(context: android.content.Context, var kind: String, var ink:
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.9f; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas); paint.color = ink
-        paint.strokeWidth = if (kind == "close") 1.6f else 1.9f
+        paint.strokeWidth = when (kind) { "close" -> 1.6f; "alarm-small" -> 3.2f; else -> 1.9f }
         canvas.save(); val scale = resources.displayMetrics.density; canvas.translate(width / 2f - 12 * scale, height / 2f - 12 * scale); canvas.scale(scale, scale)
+        if (kind == "alarm-small") { canvas.translate(12f, 12f); canvas.scale(.5f, .5f); canvas.translate(-12f, -12f) }
         fun line(x: Float, y: Float, x2: Float, y2: Float) = canvas.drawLine(x, y, x2, y2, paint)
         when (kind) {
+            "alarm", "alarm-small", "alarm-off" -> { canvas.drawCircle(12f,13f,8f,paint); line(12f,9f,12f,13f); line(12f,13f,15f,15f); line(3f,5f,6f,2f); line(18f,2f,21f,5f); line(6f,20f,4f,22f); line(18f,20f,20f,22f); if (kind == "alarm-off") line(3f,3f,21f,21f) }
             "back" -> { line(19f,12f,5f,12f); line(5f,12f,12f,5f); line(5f,12f,12f,19f) }
             "check" -> { line(4f,12f,9f,17f); line(9f,17f,20f,6f) }
             "delete" -> { line(4f,6f,20f,6f); line(9f,3f,15f,3f); canvas.drawRoundRect(6f,6f,18f,21f,2f,2f,paint); line(10f,10f,10f,17f); line(14f,10f,14f,17f) }
             "copy" -> { canvas.drawRoundRect(8f,8f,20f,21f,2f,2f,paint); line(16f,4f,4f,4f); line(4f,4f,4f,17f) }
             "close" -> { line(8f,8f,16f,16f); line(8f,16f,16f,8f) }
             "add" -> { line(12f,5f,12f,19f); line(5f,12f,19f,12f) }
+            "filter-all" -> { line(4f,5f,20f,5f); line(7f,12f,17f,12f); line(10f,19f,14f,19f) }
             "grid" -> { for (x in listOf(4f,14f)) for (y in listOf(4f,14f)) canvas.drawRoundRect(x,y,x+6f,y+6f,1f,1f,paint) }
             "list" -> { for (y in listOf(5f,12f,19f)) line(4f,y,20f,y) }
             "reset" -> {

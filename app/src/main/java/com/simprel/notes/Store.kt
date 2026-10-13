@@ -7,7 +7,7 @@ import org.json.JSONObject
 import java.io.File
 
 /** Atomic replacement keeps the previous complete file if a write is interrupted. */
-class Store(context: Context) {
+class Store(private val context: Context) {
     private val file = AtomicFile(File(context.filesDir, "notes.json"))
     val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
     val notes = mutableListOf<Note>()
@@ -16,15 +16,16 @@ class Store(context: Context) {
             val array = JSONArray(file.openRead().bufferedReader().use { it.readText() })
             for (i in 0 until array.length()) {
                 val item = array.getJSONObject(i)
-                notes.add(Note(item.getString("id"), item.getString("text")))
+                notes.add(Note(item.getString("id"), item.getString("text"), item.optLong("reminderAt")))
             }
         } catch (_: java.io.FileNotFoundException) { }
     }
     fun save() {
         val array = JSONArray()
-        notes.filter { it.text.isNotBlank() }.forEach { array.put(JSONObject().put("id", it.id).put("text", it.text)) }
+        notes.filter { it.text.isNotBlank() }.forEach { array.put(JSONObject().put("id", it.id).put("text", it.text).put("reminderAt", it.reminderAt)) }
         val stream = file.startWrite()
         try { stream.write(array.toString().toByteArray(Charsets.UTF_8)); file.finishWrite(stream) }
         catch (e: Exception) { file.failWrite(stream); throw e }
+        Reminders.sync(context, notes)
     }
 }

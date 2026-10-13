@@ -1,6 +1,6 @@
 # Simprel Notes
 
-A small, offline Android notes app with Markdown and a Material 3 style interface. Fast to open, with configurable editor actions, gestures, and note layouts. Android 8.0+ (API 26).
+A small, offline Android notes app with Markdown and a Material 3 style interface. Fast to open, with configurable editor actions, gestures, note layouts, and local reminders. Android 8.0+ (API 26).
 
 AI-made / fully vibecoded.
 
@@ -9,6 +9,16 @@ Download apk [here.](https://github.com/rywby-dot/simprel-notes/releases/downloa
 https://github.com/user-attachments/assets/dc20ec21-9430-48db-b4a3-ad1d3d3a9b4f
 
 <img width="288" height="640" alt="photo_2026-10-12_19-50-05" src="https://github.com/user-attachments/assets/cff070a4-dc8a-46e9-a297-789deca0296a" /> <img width="288" height="640" alt="photo_2026-10-12_19-50-09" src="https://github.com/user-attachments/assets/5d095bae-7b43-4f88-a8c5-d7c51105b1f2" /> <img width="288" height="640" alt="photo_2026-10-12_19-50-13" src="https://github.com/user-attachments/assets/ddc3ad0c-02f0-498e-8eb4-913758e7588f" />
+
+## Reminders (2.0)
+
+Tap the alarm button beside Delete in the editor toolbar to choose a day, hour, and minute. Hours and minutes wrap around; dates extend up to one year ahead. Cancel leaves the reminder unchanged, Set keeps the current screen, and Set and exit saves and closes the app. Write some text before setting a reminder.
+
+A reminder badge appears at the bottom right of a card (beside the cross in compact mode). Tap to change its time; hold to remove it, with optional confirmation in Settings. Removal shows an Undo panel by default; its own switch appears under deletion undo settings and uses the shared panel duration. Undo restores the original reminder time without changing the note text or order. When due, a local notification shows the raw note text and opens that note when tapped. A muted orange badge marks a due reminder until you view the note; its badge then disappears, and the note counts as having no reminder. Future reminders remain when editing a note. Reminders survive relaunch, reboot, updates, and deletion undo. Discard restores the reminder from when the editor was opened.
+
+The filter button between quick deletion and the layout switch cycles through all notes, notes with reminders, and notes without reminders. Settings can reverse the order of the last two modes. The filter resets to all notes when you return to the app; opening the editor or settings and rotating the screen keep the current filter. Reordering a filtered list moves only its visible notes, preserving hidden notes in their canonical positions.
+
+Android 13+ requires notification permission, and Android 12+ requires access to alarms and reminders for precise delivery. The picker directs you to the relevant Android settings when necessary; return and tap Set again. If exact alarm access is later revoked, pending reminders use Android's approximate delivery until access is restored. Notification channel settings and Android's force-stop restrictions still apply. No network or background service is used.
 
 ## Build
 
@@ -73,9 +83,12 @@ python3 scripts/build-copy-tests.py
 adb install -r app/build/local/copy-device-tests/copy-tests.apk
 adb shell am instrument -w com.simprel.notes.copytests/com.simprel.notes.CopyTests
 adb shell am instrument -w com.simprel.notes.copytests/com.simprel.notes.SmokeTests
+adb shell pm grant com.simprel.notes.copytests android.permission.POST_NOTIFICATIONS
+adb shell appops set com.simprel.notes.copytests SCHEDULE_EXACT_ALARM allow
+adb shell am instrument -w com.simprel.notes.copytests/com.simprel.notes.ReminderTests
 adb uninstall com.simprel.notes.copytests
 ```
 
-Keep the device unlocked. Use the same signing environment for both Python scripts. `CopyTests` checks all copy button/swipe actions, clipboard contents, deletion, confirmation, undo, and crosses in both layouts/directions. It refuses to run against the production application ID. These tests replace the clipboard contents.
+Keep the device unlocked. Use the same signing environment for both Python scripts. `CopyTests` checks all copy button/swipe actions, clipboard contents, deletion, confirmation, undo, and crosses in both layouts/directions. It refuses to run against the production application ID. These tests replace the clipboard contents. `ReminderTests` additionally checks picker controls, saved times, badges in both layouts/directions, removal confirmation, filter cycling/order and lifecycle reset, filtered reordering, actual alarm delivery, notification text/navigation, completed reminder badges, and Set and exit. The permission grant command is for Android 13+; the alarm app-op is for Android 12+. If the phone blocks shell permission grants, enable notifications and alarms for **Simprel Copy Tests** through Android settings instead.
 
 For changes to the UI, also check keyboard/scroll behavior, themes, English/Russian, and large text. See [AGENTS.md](AGENTS.md) for the code map and contribution rules.

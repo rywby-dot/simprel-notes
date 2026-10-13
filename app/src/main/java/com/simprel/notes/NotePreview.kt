@@ -15,6 +15,9 @@ class NotePreview(context: Context) : TextView(context) {
     var badgeLeft = 0f
     var badgeBottom = 0f
     var badgeVisible = false
+    var reminderVisible = false
+    var reminderLeft = 0f
+    var reminderTop = 0f
     var compact = false
     private var cached: StaticLayout? = null
     fun geometryChanged() { cached = null; invalidate() }
@@ -45,6 +48,9 @@ class NotePreview(context: Context) : TextView(context) {
                 right[line] = ceil((inset - paddingRight).coerceAtLeast(0f)).toInt()
                 if (badgeVisible && top < badgeBottom && top + lineHeight > 0) {
                     right[line] = maxOf(right[line], ceil((width - paddingRight - badgeLeft).coerceAtLeast(0f)).toInt())
+                }
+                if (reminderVisible && !compact && top + lineHeight > reminderTop) {
+                    right[line] = maxOf(right[line], ceil((width - paddingRight - reminderLeft).coerceAtLeast(0f)).toInt())
                 }
                 // Keep at least one glyph's width even on very small cards.
                 val limit = (available - paint.textSize).toInt().coerceAtLeast(0)

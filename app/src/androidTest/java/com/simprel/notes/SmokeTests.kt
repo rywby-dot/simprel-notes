@@ -29,6 +29,8 @@ class SmokeTests : Instrumentation() {
         try {
             val store = Store(isolated)
             check(store.notes.isEmpty())
+            File(directory, "notes.json").writeText("[{\"id\":\"legacy\",\"text\":\"Old note\"}]")
+            check(Store(isolated).notes.single() == Note("legacy", "Old note", 0))
             val first = Note(text = "# Привет\n**Мир** 🙂")
             val second = Note(text = "Вторая заметка\nНовая строка")
             store.notes.addAll(listOf(first, Note(text = " \n\t"), second))

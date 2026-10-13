@@ -1,6 +1,34 @@
 package com.simprel.notes
 
 fun main() {
+    for (withoutFirst in listOf(false, true)) {
+        val firstFilter = if (withoutFirst) "without" else "with"
+        val secondFilter = if (withoutFirst) "with" else "without"
+        check(nextReminderFilter("all", withoutFirst) == firstFilter)
+        check(nextReminderFilter(firstFilter, withoutFirst) == secondFilter)
+        check(nextReminderFilter(secondFilter, withoutFirst) == "all")
+    }
+    for (hasReminder in listOf(false, true)) check(matchesReminderFilter("all", hasReminder))
+    check(matchesReminderFilter("with", true) && !matchesReminderFilter("with", false))
+    check(matchesReminderFilter("without", false) && !matchesReminderFilter("without", true))
+    val filteredNotes = listOf(Note("hidden-a", "A"), Note("b", "Same"), Note("hidden-c", "C"), Note("d", "Same"))
+    check(reorderFilteredNotes(filteredNotes, listOf("d", "b"), setOf("b", "d"))!!.map { it.id } == listOf("hidden-a", "d", "hidden-c", "b"))
+    check(reorderFilteredNotes(filteredNotes, listOf("d", "d"), setOf("b", "d")) == null)
+    check(reorderFilteredNotes(filteredNotes, listOf("d"), setOf("b", "d")) == null)
+    check(reorderFilteredNotes(filteredNotes, listOf("missing"), setOf("missing")) == null)
+    check(reorderFilteredNotes(filteredNotes, filteredNotes.reversed().map { it.id }, filteredNotes.map { it.id }.toSet()) == filteredNotes.reversed())
+    println("PASS: reminder filter cycles, matching, filtered reordering, hidden slots and invalid IDs")
+    val leap = java.time.ZonedDateTime.parse("2023-12-31T12:30:00+01:00[Europe/Paris]")
+    val dates = reminderDates(leap)
+    check(dates.size == 367 && dates[1].toString() == "2024-01-01")
+    check(dates.last().toString() == "2024-12-31")
+    check(reminderTime(dates.first(), 12, 30, leap) == null)
+    check(reminderTime(dates.first(), 12, 31, leap) != null)
+    check(reminderTime(dates.last(), 12, 31, leap) == null)
+    check(reminderTime(dates.last(), 12, 30, leap) != null)
+    check(reminderTime(java.time.LocalDate.parse("2024-03-31"), 2, 30, leap) == null)
+    check(reminderTime(java.time.LocalDate.parse("2024-10-27"), 2, 30, leap) != null)
+    println("PASS: reminder dates, year/month rollover, leap year, future bounds and daylight saving gaps")
     check(copyAction("copy_delete_exit") == CopyAction(true, "exit"))
     check(copyAction("copy_stay") == CopyAction(false, "editor"))
     check(copyAction("copy_list") == CopyAction(false, "list"))
@@ -29,6 +57,8 @@ fun main() {
     check(restored.last().text == "original")
     check(existing.text == "autosaved edits") // Failed persistence can restore untouched pre-discard objects.
     check(restored.first() === other)
+    val timed = EditorDraft("timed", "original", 0, reminderAt = 12345)
+    check(timed.discardFrom(listOf(Note("timed", "edited", 67890))).single() == Note("timed", "original", 12345))
     val newNote = Note("new", "autosaved new text")
     check(EditorDraft("new", "", -1).discardFrom(listOf(newNote, other)) == listOf(other))
     existing.text = ""

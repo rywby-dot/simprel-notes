@@ -149,7 +149,10 @@ class AnimatedNotesGrid(
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             touchedBadge = cards.values.reversed().firstNotNullOfOrNull { card ->
-                val badge = card.findViewWithTag<View>("note-delete-badge")
+                val badge = listOf("note-delete-badge", "note-reminder-badge").mapNotNull { card.findViewWithTag<View>(it) }.firstOrNull { badge ->
+                    val expand = 10 * resources.displayMetrics.density
+                    badge.visibility == View.VISIBLE && event.x >= card.x + badge.x - expand && event.x <= card.x + badge.x + badge.width + expand && event.y >= card.y + badge.y - expand && event.y <= card.y + badge.y + badge.height + expand
+                }
                 if (badge == null || badge.visibility != View.VISIBLE) null else {
                     val x = card.x + badge.x
                     val y = card.y + badge.y

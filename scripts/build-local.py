@@ -51,7 +51,7 @@ run(tools / 'aapt2', 'compile', '--dir', OUT / 'markwon-res', '-o', OUT / 'markw
 manifest = (ROOT / 'app/src/main/AndroidManifest.xml').read_text().replace('<manifest ', '<manifest package="com.simprel.notes" ', 1)
 (OUT / 'AndroidManifest.xml').write_text(manifest)
 run(tools / 'aapt2', 'link', '-I', android, '--manifest', OUT / 'AndroidManifest.xml',
-    '--min-sdk-version', '26', '--target-sdk-version', '37', '--version-code', '21', '--version-name', '1.20',
+    '--min-sdk-version', '26', '--target-sdk-version', '37', '--version-code', '22', '--version-name', '2.0',
     '-o', OUT / 'unsigned.apk', '--java', OUT / 'generated', '--extra-packages', 'io.noties.markwon',
     OUT / 'resources.zip', OUT / 'markwon-res.zip')
 (OUT / 'resource-classes').mkdir(exist_ok=True)
@@ -68,7 +68,7 @@ run('java', '-cp', os.pathsep.join(map(str, compiler_jars)), 'org.jetbrains.kotl
 run('java', '-cp', os.pathsep.join(map(str, compiler_jars)), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler',
     '-no-stdlib', '-no-reflect', '-jvm-target', '17', '-classpath', stdlib,
     '-d', OUT / 'rules-tests.jar', ROOT / 'app/src/main/java/com/simprel/notes/InteractionRules.kt',
-    ROOT / 'app/src/main/java/com/simprel/notes/MarkdownAlignment.kt', ROOT / 'app/src/main/java/com/simprel/notes/Note.kt', ROOT / 'app/src/main/java/com/simprel/notes/EditorDraft.kt', ROOT / 'tests/InteractionRulesTest.kt')
+    ROOT / 'app/src/main/java/com/simprel/notes/MarkdownAlignment.kt', ROOT / 'app/src/main/java/com/simprel/notes/Note.kt', ROOT / 'app/src/main/java/com/simprel/notes/EditorDraft.kt', ROOT / 'app/src/main/java/com/simprel/notes/ReminderTime.kt', ROOT / 'tests/InteractionRulesTest.kt')
 run('java', '-cp', os.pathsep.join(map(str, [OUT / 'rules-tests.jar', stdlib])), 'com.simprel.notes.InteractionRulesTestKt')
 markdown_test_classpath = os.pathsep.join(map(str, [stdlib, commonmark, strike_parser]))
 run('java', '-cp', os.pathsep.join(map(str, compiler_jars)), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler',
