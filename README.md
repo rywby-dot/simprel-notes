@@ -4,7 +4,7 @@ A small, offline Android notes app with Markdown and a Material 3 style interfac
 
 AI-made / fully vibecoded.
 
-Download apk [here.](https://github.com/rywby-dot/simprel-notes/releases/download/v1.20/Simprel-Notes.apk)
+Download apk [here](https://github.com/rywby-dot/simprel-notes/releases)
 
 https://github.com/user-attachments/assets/dc20ec21-9430-48db-b4a3-ad1d3d3a9b4f
 
