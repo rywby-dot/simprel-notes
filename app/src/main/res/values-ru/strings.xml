@@ -111,4 +111,19 @@
     <string name="empty_filtered_notes">Нет заметок для этого фильтра</string>
     <string name="undo_reminder">При удалении напоминания</string>
     <string name="reminder_deleted">Напоминание удалено</string>
+    <string name="voice_note">Голосовая заметка</string>
+    <string name="voice_save">Сохранить</string>
+    <string name="voice_pause">Приостановить запись</string>
+    <string name="voice_resume">Продолжить запись</string>
+    <string name="voice_error">Не удалось записать или воспроизвести звук. Проверьте доступ к микрофону и свободное место.</string>
+    <string name="voice_trim">Потяните края, чтобы обрезать запись</string>
+    <string name="voice_start">Начало записи</string>
+    <string name="voice_end">Конец записи</string>
+    <string name="voice_play">Воспроизвести</string>
+    <string name="voice_stop">Приостановить воспроизведение</string>
+    <string name="voice_seek">Позиция воспроизведения</string>
+    <string name="voice_start_earlier">Сдвинуть начало назад</string>
+    <string name="voice_start_later">Сдвинуть начало вперёд</string>
+    <string name="voice_end_earlier">Сдвинуть конец назад</string>
+    <string name="voice_end_later">Сдвинуть конец вперёд</string>
 </resources>

@@ -111,4 +111,19 @@
     <string name="empty_filtered_notes">No notes match this filter</string>
     <string name="undo_reminder">When removing a reminder</string>
     <string name="reminder_deleted">Reminder removed</string>
+    <string name="voice_note">Voice note</string>
+    <string name="voice_save">Save</string>
+    <string name="voice_pause">Pause recording</string>
+    <string name="voice_resume">Resume recording</string>
+    <string name="voice_error">Could not record or play audio. Check microphone access and available storage.</string>
+    <string name="voice_trim">Drag the edges to trim</string>
+    <string name="voice_start">Trim start</string>
+    <string name="voice_end">Trim end</string>
+    <string name="voice_play">Play</string>
+    <string name="voice_stop">Pause playback</string>
+    <string name="voice_seek">Playback position</string>
+    <string name="voice_start_earlier">Move start earlier</string>
+    <string name="voice_start_later">Move start later</string>
+    <string name="voice_end_earlier">Move end earlier</string>
+    <string name="voice_end_later">Move end later</string>
 </resources>

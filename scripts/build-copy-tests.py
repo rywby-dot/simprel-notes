@@ -34,7 +34,7 @@ manifest = manifest.replace('android:name=".MainActivity"', 'android:name="com.s
 manifest = manifest.replace('android:label="Simprel Notes"', 'android:label="Simprel Copy Tests"')
 manifest = manifest.replace('</manifest>', '\n'.join(
     f'<instrumentation android:name="com.simprel.notes.{suite}" android:targetPackage="com.simprel.notes.copytests"/>'
-    for suite in ['CopyTests', 'SmokeTests', 'ReminderTests']) + '\n</manifest>')
+    for suite in ['CopyTests', 'SmokeTests', 'ReminderTests', 'VoiceTests']) + '\n</manifest>')
 (TEST / 'AndroidManifest.xml').write_text(manifest)
 run(tools / 'aapt2', 'link', '-I', android, '--manifest', TEST / 'AndroidManifest.xml',
     '--min-sdk-version', '26', '--target-sdk-version', '37', '-o', TEST / 'unsigned.apk',

@@ -66,7 +66,7 @@ class ReminderTests : Instrumentation() {
             check(Reminders.hasReminder(targetContext, timedB)) { "Opening a future reminder must preserve it" }
             val toolbar = field("toolbar") as ViewGroup
             val actions = (0 until toolbar.childCount).mapNotNull { toolbar.getChildAt(it).contentDescription?.toString() }
-            check(actions == listOf(R.string.all_notes, R.string.reminder, R.string.delete_current, R.string.copy_note, R.string.done).map { activity.getString(it) })
+            check(actions == listOf(R.string.all_notes, R.string.reminder, R.string.voice_note, R.string.delete_current, R.string.copy_note, R.string.done).map { activity.getString(it) })
             check(toolbar.getChildAt(1).layoutParams.width == 0) { "Spacer must follow Back" }
         }
         for (layout in listOf("grid", "compact")) for (direction in listOf("normal", "reverse")) for (withoutFirst in listOf(false, true)) {
@@ -283,6 +283,12 @@ class ReminderTests : Instrumentation() {
                 check(wheels[1].wrapSelectorWheel && wheels[2].wrapSelectorWheel)
                 check(wheels[0].displayedValues[0] == activity.getString(R.string.today))
                 check(wheels[0].displayedValues[1] == activity.getString(R.string.tomorrow))
+                val now = java.time.ZonedDateTime.now()
+                val dates = reminderDates(now)
+                val locale = activity.resources.configuration.locales[0]
+                for (index in listOf(2, 17, 45, dates.lastIndex)) {
+                    check(wheels[0].displayedValues[index] == reminderDateLabel(dates[index], dates.first(), locale))
+                }
                 click(dialog, R.string.cancel); check(note.reminderAt == 0L)
                 call("chooseReminder", note)
                 click(field("reminderDialog") as Dialog, R.string.set_reminder)

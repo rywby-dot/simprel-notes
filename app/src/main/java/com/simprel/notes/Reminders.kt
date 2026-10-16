@@ -26,7 +26,7 @@ object Reminders {
     fun sync(c: Context, notes: List<Note>, force: Boolean = false) {
         val p = prefs(c)
         val manager = c.getSystemService(AlarmManager::class.java)
-        val desired = notes.filter { it.text.isNotBlank() && it.reminderAt > 0 }.associateBy { it.id }
+        val desired = notes.filter { it.hasContent && it.reminderAt > 0 }.associateBy { it.id }
         val old = p.getStringSet("scheduled", emptySet())!!.toSet()
         for (id in old - desired.keys) {
             manager.cancel(alarm(c, id)); c.getSystemService(NotificationManager::class.java).cancel(id, 1)
@@ -64,10 +64,26 @@ object Reminders {
             .setData(Uri.parse("simprel://note/$id")).putExtra("note_id", id)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val tap = PendingIntent.getActivity(c, 0, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val notification = Notification.Builder(c, "reminders").setSmallIcon(R.drawable.ic_reminder)
-            .setContentTitle(local.getString(R.string.reminder)).setContentText(note.text)
-            .setStyle(Notification.BigTextStyle().bigText(note.text)).setContentIntent(tap).setAutoCancel(true)
-            .setCategory(Notification.CATEGORY_REMINDER).build()
+        val builder = Notification.Builder(c, "reminders").setSmallIcon(if (note.audioFile.isEmpty()) R.drawable.ic_reminder else R.drawable.ic_voice)
+            .setContentTitle(local.getString(R.string.reminder)).setContentText(note.text.ifBlank { local.getString(R.string.voice_note) })
+            .setContentIntent(tap).setAutoCancel(true).setCategory(Notification.CATEGORY_REMINDER)
+        if (note.audioFile.isEmpty()) builder.setStyle(Notification.BigTextStyle().bigText(note.text))
+        else {
+            val density = c.resources.displayMetrics.density
+            val bitmap = android.graphics.Bitmap.createBitmap((112 * density).toInt(), (40 * density).toInt(), android.graphics.Bitmap.Config.ARGB_8888)
+            val dark = c.resources.configuration.uiMode and 0x30 == 0x20
+            val ink = android.graphics.Color.parseColor(if (dark) "#E6E0E9" else "#1D1B20")
+            val peaks = note.audioPeaks.ifEmpty { try { VoiceAudio.readEnvelope(Store(c).audioFile(note.audioFile)) } catch (_: Exception) { emptyList() } }
+            VoiceStrip.drawStrip(android.graphics.Canvas(bitmap), android.graphics.RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat()), peaks, ink, density)
+            val row = android.widget.RemoteViews(c.packageName, R.layout.notification_voice).apply {
+                setImageViewBitmap(R.id.notification_voice_wave, bitmap)
+                setContentDescription(R.id.notification_voice_wave, local.getString(R.string.voice_note))
+                setTextViewText(R.id.notification_voice_text, note.text)
+                setTextColor(R.id.notification_voice_text, ink)
+            }
+            builder.setStyle(Notification.DecoratedCustomViewStyle()).setCustomContentView(row).setCustomBigContentView(row)
+        }
+        val notification = builder.build()
         try { manager.notify(id, 1, notification) } catch (_: SecurityException) { }
         c.sendBroadcast(Intent("${c.packageName}.REMINDERS_CHANGED").setPackage(c.packageName))
     }

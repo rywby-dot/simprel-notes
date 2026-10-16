@@ -78,7 +78,9 @@ class MainActivity : Activity() {
     private var accent = 0
     private var darkTheme = false
     private var restored: ScreenState? = null
-    private data class ScreenState(val screen: String, val note: Note?, val quick: Boolean, val returning: Boolean, val createdIds: Set<String>, val draft: EditorDraft?, val filter: String)
+    private data class ScreenState(val screen: String, val note: Note?, val quick: Boolean, val returning: Boolean, val createdIds: Set<String>, val draft: EditorDraft?, val filter: String, val voice: VoiceSession? = null)
+    private data class VoiceSession(val audio: VoiceAudio, val start: Float, val end: Float)
+    private var retainingVoice = false
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
     private fun pref(key: String, fallback: String) = store.prefs.getString(key, fallback) ?: fallback
     private fun textScale() = store.prefs.getInt("text_scale", 100).coerceIn(50, 400) / 100f
@@ -167,6 +169,7 @@ class MainActivity : Activity() {
                     else -> showList()
                 }
                 host.visibility = View.VISIBLE
+                previous.voice?.let { showVoiceRecorder(it) }
                 return
             }
             reminderFilter = "all"
@@ -188,12 +191,20 @@ class MainActivity : Activity() {
     }
     override fun onDestroy() {
         reminderDialog?.dismiss()
+        stopPlayer()
+        if (ready && !isChangingConfigurations) editorDraft?.let { store.removeUnusedAudio(it.audioFile) }
         undoTimeout?.let { undoHandler.removeCallbacks(it) }
         super.onDestroy()
     }
-    override fun onRetainNonConfigurationInstance(): Any = ScreenState(screen, current, quickDelete, backgrounded, createdNoteIds.toSet(), editorDraft, reminderFilter)
+    override fun onRetainNonConfigurationInstance(): Any {
+        pauseVoice?.invoke()
+        val session = voiceAudio?.let { audio -> retainingVoice = true; VoiceSession(audio, voiceWave?.start ?: 0f, voiceWave?.end ?: 1f) }
+        return ScreenState(screen, current, quickDelete, backgrounded, createdNoteIds.toSet(), editorDraft, reminderFilter, session)
+    }
     override fun onPause() {
         preparingBackground = true
+        pauseVoice?.invoke()
+        stopPlayer()
         if (ready) {
             confirmation?.dismiss()
             if (listGestureMode != 0) cancelListGesture()
@@ -215,7 +226,7 @@ class MainActivity : Activity() {
                 getSystemService(android.app.UiModeManager::class.java).setApplicationNightMode(mode)
             }
         }
-        backgrounded = !isChangingConfigurations && reminderDialog?.isShowing != true
+        backgrounded = !isChangingConfigurations && reminderDialog?.isShowing != true && !microphoneRequest
         super.onPause()
     }
     override fun onStop() { unregisterReceiver(reminderChanges); if (ready) persist(); super.onStop() }
@@ -239,7 +250,7 @@ class MainActivity : Activity() {
     private var reminderDialog: android.app.Dialog? = null
     private fun chooseReminder(note: Note) {
         hideKeyboard()
-        if (note.text.isBlank()) { Toast.makeText(this, str(R.string.reminder_empty), Toast.LENGTH_SHORT).show(); return }
+        if (!note.hasContent) { Toast.makeText(this, str(R.string.reminder_empty), Toast.LENGTH_SHORT).show(); return }
         val now = java.time.ZonedDateTime.now()
         val first = now.toLocalDate()
         val dates = reminderDates(now)
@@ -259,7 +270,7 @@ class MainActivity : Activity() {
             return picker
         }
         val day = wheel(dates.lastIndex, dates.indexOf(initial.toLocalDate()), dates.mapIndexed { index, date ->
-            when (index) { 0 -> str(R.string.today); 1 -> str(R.string.tomorrow); else -> date.format(java.time.format.DateTimeFormatter.ofPattern(if (date.year != first.year || date.month != first.month) "d MMM" else "d", locale)) }
+            when (index) { 0 -> str(R.string.today); 1 -> str(R.string.tomorrow); else -> reminderDateLabel(date, first, locale) }
         }.toTypedArray(), false, R.string.reminder_day, 2f)
         val hour = wheel(23, initial.hour, Array(24) { "%02d".format(it) }, true, R.string.reminder_hour, 1f)
         val minute = wheel(59, initial.minute, Array(60) { "%02d".format(it) }, true, R.string.reminder_minute, 1f)
@@ -326,6 +337,310 @@ class MainActivity : Activity() {
         dialog.show()
         dialog.window?.setLayout(minOf(resources.displayMetrics.widthPixels - dp(32), dp(480)), -2)
     }
+    private var voiceAudio: VoiceAudio? = null
+    private var voiceWave: VoiceWaveform? = null
+    private var pauseVoice: (() -> Unit)? = null
+    private var microphoneRequest = false
+    private var player: android.media.MediaPlayer? = null
+    private var playerPanel: View? = null
+    private var playingId: String? = null
+    private var audioFocus: android.media.AudioFocusRequest? = null
+    private val voiceHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var voiceTick: Runnable? = null
+    private var playerTick: Runnable? = null
+    private fun voiceError() { Toast.makeText(this, str(R.string.voice_error), Toast.LENGTH_LONG).show() }
+    private var resumeVoice: (() -> Unit)? = null
+    private var stopVoicePreview: (() -> Unit)? = null
+    private var editorVoiceRow: VoiceStrip? = null
+    private fun chooseVoice() {
+        if (current == null || reminderDialog?.isShowing == true) return
+        hideKeyboard(); stopPlayer()
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            microphoneRequest = true; requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 21); return
+        }
+        showVoiceRecorder()
+    }
+    private fun editVoice() {
+        val note = current ?: return
+        if (note.audioFile.isEmpty()) { chooseVoice(); return }
+        if (reminderDialog?.isShowing == true) return
+        hideKeyboard(); stopPlayer()
+        // Loading an attachment never changes its saved file, including Cancel and rotation.
+        val loading = android.app.Dialog(this)
+        loading.setContentView(ProgressBar(this).apply { setPadding(dp(24), dp(24), dp(24), dp(24)) })
+        loading.window?.setBackgroundDrawable(shape(surface))
+        reminderDialog = loading
+        var cancelled = false
+        loading.setOnDismissListener { cancelled = true; if (reminderDialog === loading) reminderDialog = null }
+        loading.show()
+        val audio = VoiceAudio(java.io.File.createTempFile("voice-", ".pcm", cacheDir))
+        Thread({
+            val success = try { audio.importWave(store.audioFile(note.audioFile)); true } catch (_: Exception) { false }
+            runOnUiThread {
+                if (cancelled || isDestroyed || isFinishing || current?.id != note.id) { audio.close(); return@runOnUiThread }
+                reminderDialog = null; loading.dismiss()
+                if (success) showVoiceRecorder(VoiceSession(audio, 0f, 1f)) else { audio.close(); voiceError() }
+            }
+        }, "voice-load").start()
+    }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, results)
+        if (requestCode == 21) {
+            microphoneRequest = false
+            if (results.firstOrNull() == android.content.pm.PackageManager.PERMISSION_GRANTED && !isFinishing) {
+                val resume = resumeVoice
+                if (resume != null) resume() else chooseVoice()
+            } else voiceError()
+        }
+    }
+    private fun showVoiceRecorder() = showVoiceRecorder(null)
+    private fun showVoiceRecorder(session: VoiceSession?) {
+        if (reminderDialog?.isShowing == true) return
+        val note = current ?: return
+        hideKeyboard()
+        val audio = session?.audio ?: VoiceAudio(java.io.File.createTempFile("voice-", ".pcm", cacheDir))
+        voiceAudio = audio
+        val dialog = android.app.Dialog(this)
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(24), dp(16), dp(16)) }
+        panel.addView(TextView(this).apply { text = str(R.string.voice_note); textSize = 24f * textScale(); setTextColor(fg) })
+        val clock = TextView(this).apply { gravity = Gravity.CENTER; textSize = 16f * textScale(); setTextColor(secondary) }
+        panel.addView(clock)
+        val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        val wave = VoiceWaveform(this, accent, outline).apply { contentDescription = str(R.string.voice_trim); tag = "voice-waveform" }
+        wave.start = session?.start ?: 0f; wave.end = session?.end ?: 1f
+        voiceWave = wave
+        row.addView(wave, LinearLayout.LayoutParams(0, dp(144), 1f))
+        val controls = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER }
+        val record = icon("pause", str(R.string.voice_pause)) {} as Glyph
+        record.tag = "voice-toggle"
+        val listen = icon("play", str(R.string.voice_play)) {} as Glyph
+        listen.tag = "voice-preview-toggle"
+        controls.addView(record, LinearLayout.LayoutParams(dp(48), dp(48)))
+        controls.addView(listen, LinearLayout.LayoutParams(dp(48), dp(48)))
+        row.addView(controls)
+        panel.addView(row)
+        val hint = TextView(this).apply { text = str(R.string.voice_trim); setTextColor(secondary); textSize = 14f * textScale(); gravity = Gravity.CENTER }
+        panel.addView(hint)
+        var preview: android.media.MediaPlayer? = null
+        var previewFile: java.io.File? = null
+        var previewGeneration = 0
+        var preparingPreview = false
+        fun stopPreview() {
+            previewGeneration++; preparingPreview = false
+            preview?.release(); preview = null
+            previewFile?.delete(); previewFile = null
+            listen.kind = "play"; listen.contentDescription = str(R.string.voice_play); listen.invalidate()
+        }
+        stopVoicePreview = { stopPreview() }
+        fun time(ms: Long): String = "%02d:%02d.%01d".format(ms / 60000, ms / 1000 % 60, ms / 100 % 10)
+        fun updateTrim() {
+            clock.text = "${time((audio.durationMs * wave.start).toLong())} – ${time((audio.durationMs * wave.end).toLong())}"
+            wave.playhead = (wave.playhead ?: wave.start).coerceIn(wave.start, wave.end)
+        }
+        wave.changed = {
+            stopPreview(); wave.playhead = wave.start; updateTrim()
+        }
+        wave.seeked = { fraction -> preview?.seekTo((audio.durationMs * fraction).toInt()) }
+        fun updateMode() {
+            record.kind = if (audio.recording) "pause" else "mic"; record.invalidate()
+            record.contentDescription = str(if (audio.recording) R.string.voice_pause else R.string.voice_resume)
+            listen.visibility = if (audio.recording) View.GONE else View.VISIBLE
+            hint.visibility = listen.visibility
+            wave.update(audio.spectrum, audio.waveform(), audio.recording)
+            if (!audio.recording) updateTrim() else wave.playhead = null
+        }
+        pauseVoice = { stopPreview(); audio.pause(); updateMode() }
+        resumeVoice = {
+            stopPreview()
+            try { wave.start = 0f; wave.end = 1f; audio.start(); updateMode() }
+            catch (_: Exception) { audio.pause(); updateMode(); voiceError() }
+        }
+        record.setOnClickListener {
+            if (audio.recording) { stopPreview(); audio.pause(); wave.playhead = wave.start; updateMode() }
+            else if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                microphoneRequest = true; requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 21)
+            } else resumeVoice?.invoke()
+        }
+        listen.setOnClickListener {
+            if (audio.recording || preparingPreview || audio.durationMs < 1) return@setOnClickListener
+            val existing = preview
+            if (existing != null) {
+                if (existing.isPlaying) { existing.pause(); listen.kind = "play"; listen.contentDescription = str(R.string.voice_play) }
+                else { existing.start(); listen.kind = "pause"; listen.contentDescription = str(R.string.voice_stop) }
+                listen.invalidate(); return@setOnClickListener
+            }
+            preparingPreview = true
+            val generation = ++previewGeneration
+            val file = java.io.File.createTempFile("voice-preview-", ".wav", cacheDir)
+            Thread({
+                val success = try { audio.preview(file); true } catch (_: Exception) { false }
+                runOnUiThread {
+                    if (voiceAudio !== audio || generation != previewGeneration || isDestroyed) { file.delete(); return@runOnUiThread }
+                    preparingPreview = false
+                    if (!success) { file.delete(); voiceError(); return@runOnUiThread }
+                    try {
+                        val player = android.media.MediaPlayer()
+                        preview = player; previewFile = file
+                        player.setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                        player.setDataSource(file.path); player.prepare()
+                        player.seekTo((audio.durationMs * (wave.playhead ?: wave.start).coerceIn(wave.start, wave.end)).toInt())
+                        player.setOnCompletionListener { stopPreview(); wave.playhead = wave.start }
+                        player.setOnErrorListener { _, _, _ -> stopPreview(); voiceError(); true }
+                        player.start(); listen.kind = "pause"; listen.contentDescription = str(R.string.voice_stop); listen.invalidate()
+                    } catch (_: Exception) { stopPreview(); voiceError() }
+                }
+            }, "voice-preview").start()
+        }
+        val buttons = LinearLayout(this)
+        fun button(label: Int, filled: Boolean = false, action: () -> Unit) {
+            buttons.addView(TextView(this).apply {
+                text = str(label); textSize = 14f * textScale(); gravity = Gravity.CENTER; minHeight = dp(48); isFocusable = true
+                setTextColor(if (filled) bg else accent); setPadding(dp(6), dp(12), dp(6), dp(12))
+                background = android.graphics.drawable.RippleDrawable(ColorStateList.valueOf(outline), shape(if (filled) accent else Color.TRANSPARENT, 24), shape(Color.WHITE, 24))
+                setOnClickListener { action() }
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        var saving = false
+        fun save(exit: Boolean) {
+            if (saving) return
+            stopPreview(); audio.pause(); updateMode()
+            if (audio.durationMs < 100 || audio.failure != null) { voiceError(); return }
+            val name = "${java.util.UUID.randomUUID()}.wav"
+            val target = store.audioFile(name)
+            saving = true; dialog.setCancelable(false)
+            record.isEnabled = false; listen.isEnabled = false; wave.isEnabled = false
+            for (i in 0 until buttons.childCount) buttons.getChildAt(i).isEnabled = false
+            val first = wave.start; val last = wave.end
+            Thread({
+                val success = try { audio.save(target, first, last); true } catch (_: Exception) { false }
+                val peaks = if (success) try { VoiceAudio.readEnvelope(target) } catch (_: Exception) { emptyList() } else emptyList()
+                runOnUiThread {
+                    if (isDestroyed || isFinishing || current?.id != note.id) { target.delete(); return@runOnUiThread }
+                    saving = false; dialog.setCancelable(true)
+                    record.isEnabled = true; listen.isEnabled = true; wave.isEnabled = true
+                    for (i in 0 until buttons.childCount) buttons.getChildAt(i).isEnabled = true
+                    if (!success) { target.delete(); voiceError(); return@runOnUiThread }
+                    val previousFile = note.audioFile; val previousPeaks = note.audioPeaks
+                    note.audioFile = name; note.audioPeaks = peaks
+                    val inserted = store.notes.none { it.id == note.id }
+                    if (inserted) { store.notes.add(0, note); createdNoteIds.add(note.id) }
+                    if (!persist()) {
+                        if (inserted) { store.notes.remove(note); createdNoteIds.remove(note.id) }
+                        note.audioFile = previousFile; note.audioPeaks = previousPeaks; target.delete(); return@runOnUiThread
+                    }
+                    if (previousFile != editorDraft?.audioFile) store.removeUnusedAudio(previousFile)
+                    refreshEditorVoice(note); listPage?.submit(); dialog.dismiss()
+                    if (exit) exitApp() else focusEditor()
+                }
+            }, "voice-save").start()
+        }
+        button(R.string.cancel) { dialog.dismiss(); focusEditor() }
+        button(R.string.voice_save) { save(false) }
+        button(R.string.save_exit, true) { save(true) }
+        buttons.addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ ->
+            if (right - left != oldRight - oldLeft) {
+                val desired = 14f * resources.displayMetrics.scaledDensity * textScale()
+                val paint = android.text.TextPaint().apply { textSize = desired }
+                val labels = (0 until buttons.childCount).map { buttons.getChildAt(it) as TextView }
+                val fitted = labels.minOf { label ->
+                    val longest = label.text.toString().split(' ').maxOf { paint.measureText(it) }.coerceAtLeast(1f)
+                    desired * (label.width - label.paddingLeft - label.paddingRight).coerceAtLeast(1) / longest
+                }.coerceAtMost(desired)
+                labels.forEach { it.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, fitted) }
+            }
+        }
+        panel.addView(buttons)
+        dialog.setContentView(ScrollView(this).apply { addView(panel) })
+        dialog.window?.setBackgroundDrawable(shape(surface, 28))
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        dialog.setOnDismissListener {
+            stopPreview(); stopVoicePreview = null; resumeVoice = null
+            voiceTick?.let { voiceHandler.removeCallbacks(it) }; voiceTick = null
+            if (!retainingVoice) audio.close()
+            voiceAudio = null; voiceWave = null; pauseVoice = null
+            if (reminderDialog === dialog) reminderDialog = null
+        }
+        reminderDialog = dialog
+        dialog.show()
+        dialog.window?.setLayout(minOf(resources.displayMetrics.widthPixels - dp(32), dp(480)), -2)
+        try { if (session == null) audio.start() } catch (_: Exception) { voiceError(); dialog.dismiss(); return }
+        updateMode()
+        var reportedFailure = false
+        voiceTick = object : Runnable {
+            override fun run() {
+                if (voiceAudio !== audio) return
+                if (audio.recording) {
+                    wave.update(audio.spectrum, emptyList(), true); clock.text = time(audio.durationMs)
+                    if (audio.durationMs >= 3600000) { audio.pause(); updateMode() }
+                } else {
+                    if (audio.failure != null && !reportedFailure) { reportedFailure = true; audio.pause(); updateMode(); voiceError() }
+                    preview?.let { player ->
+                        if (player.isPlaying) {
+                            val position = player.currentPosition.toFloat() / audio.durationMs.coerceAtLeast(1)
+                            if (position >= wave.end) { stopPreview(); wave.playhead = wave.start }
+                            else wave.playhead = position.coerceIn(wave.start, wave.end)
+                        }
+                    }
+                }
+                voiceHandler.postDelayed(this, 40)
+            }
+        }.also { voiceHandler.post(it) }
+    }
+    private fun refreshEditorVoice(note: Note) {
+        editorVoiceRow?.apply {
+            visibility = if (note.audioFile.isEmpty()) View.GONE else View.VISIBLE
+            if (note.audioFile.isNotEmpty()) bind(note, store.audioFile(note.audioFile), accent)
+        }
+    }
+    private fun stopPlayer() {
+        playerTick?.let { voiceHandler.removeCallbacks(it) }; playerTick = null
+        player?.release(); player = null; playingId = null
+        audioFocus?.let { getSystemService(android.media.AudioManager::class.java).abandonAudioFocusRequest(it) }; audioFocus = null
+        playerPanel?.let { (it.parent as? ViewGroup)?.removeView(it) }; playerPanel = null
+    }
+    private fun playVoice(note: Note) {
+        stopPlayer(); hideKeyboard()
+        val page = listPage ?: return
+        try {
+            val audio = android.media.MediaPlayer()
+            player = audio; playingId = note.id
+            audio.setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            audio.setDataSource(store.audioFile(note.audioFile).path); audio.prepare()
+            val panel = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; background = shape(surface, 24); setPadding(dp(4), dp(4), dp(4), dp(4)); tag = "voice-player" }
+            panel.addView(icon("close", str(R.string.close)) { stopPlayer() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+            val seek = SeekBar(this).apply { max = audio.duration; contentDescription = str(R.string.voice_seek); progressTintList = ColorStateList.valueOf(accent); thumbTintList = progressTintList }
+            panel.addView(seek, LinearLayout.LayoutParams(0, dp(48), 1f))
+            val toggle = icon("pause", str(R.string.voice_stop)) {} as Glyph
+            fun state() { toggle.kind = if (audio.isPlaying) "pause" else "play"; toggle.contentDescription = str(if (audio.isPlaying) R.string.voice_stop else R.string.voice_play); toggle.invalidate() }
+            toggle.setOnClickListener { try { if (audio.isPlaying) audio.pause() else { if (audio.currentPosition >= audio.duration) audio.seekTo(0); val focus = audioFocus; if (focus != null && getSystemService(android.media.AudioManager::class.java).requestAudioFocus(focus) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) audio.start() }; state() } catch (_: Exception) { stopPlayer(); voiceError() } }
+            panel.addView(toggle, LinearLayout.LayoutParams(dp(48), dp(48)))
+            seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar?, position: Int, user: Boolean) { if (user) audio.seekTo(position) }
+                override fun onStartTrackingTouch(bar: SeekBar?) {}
+                override fun onStopTrackingTouch(bar: SeekBar?) {}
+            })
+            audio.setOnCompletionListener { stopPlayer() }
+            audio.setOnErrorListener { _, _, _ -> stopPlayer(); voiceError(); true }
+            playerPanel = panel; page.addView(panel, 1, LinearLayout.LayoutParams(-1, -2).apply { setMargins(dp(16), 0, dp(16), dp(8)) })
+            val focus = android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH).build()).setOnAudioFocusChangeListener { change ->
+                    if (change < 0 && player === audio) { audio.pause(); state() }
+                }.build()
+            audioFocus = focus
+            if (getSystemService(android.media.AudioManager::class.java).requestAudioFocus(focus) != android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+                stopPlayer(); voiceError(); return
+            }
+            audio.start()
+            playerTick = object : Runnable {
+                override fun run() {
+                    if (player !== audio) return
+                    try { if (!seek.isPressed) seek.progress = audio.currentPosition; voiceHandler.postDelayed(this, 100) }
+                    catch (_: Exception) { stopPlayer() }
+                }
+            }.also { voiceHandler.post(it) }
+        } catch (_: Exception) { stopPlayer(); voiceError() }
+    }
+
     private fun colors() {
         val dark = when (pref("theme", "system")) {
             "light" -> false; "dark", "amoled" -> true
@@ -389,6 +704,7 @@ class MainActivity : Activity() {
     }
     private fun frame(preserveGesture: Boolean = false) {
         activeEditor = null
+        editorVoiceRow = null
         colors()
         ensureHost()
         overlay?.let { it.animate().cancel(); host.removeView(it) }
@@ -419,13 +735,16 @@ class MainActivity : Activity() {
     }
     private fun hideKeyboard() { (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(host.windowToken, 0) }
     private fun open(note: Note, interactive: Boolean = false, animated: Boolean = false) {
-        editorDraft = EditorDraft(note.id, note.text, store.notes.indexOfFirst { it.id == note.id && it.text.isNotBlank() }, pref("last", ""), note.reminderAt)
+        stopPlayer()
+        editorDraft?.let { store.removeUnusedAudio(it.audioFile) }
+        editorDraft = EditorDraft(note.id, note.text, store.notes.indexOfFirst { it.id == note.id && it.hasContent }, pref("last", ""), note.reminderAt, note.audioFile, note.audioPeaks.toList())
         Reminders.seen(this, note)
         current = note; screen = "editor"; quickDelete = false
         store.prefs.edit().putString("last", note.id).apply()
         frame(interactive)
         tool("back", str(R.string.all_notes)) { leaveEditor() }; spacer()
         tool("alarm", str(R.string.reminder)) { chooseReminder(note) }
+        tool("mic", str(R.string.voice_note)) { chooseVoice() }.apply { tag = "record-voice" }
         tool("delete", str(R.string.delete_current)) { delete(note, "confirm_editor") {
             if (pref("delete_action", "exit") == "exit") exitApp() else leaveEditor()
         } }
@@ -458,7 +777,17 @@ class MainActivity : Activity() {
             isVerticalFadingEdgeEnabled = false
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
             if (android.os.Build.VERSION.SDK_INT >= 29) setEdgeEffectColor(outline)
-            addView(editor, FrameLayout.LayoutParams(-1, -2))
+            val editorContent = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+            val attachment = VoiceStrip(this@MainActivity).apply {
+                tag = "editor-voice"; contentDescription = str(R.string.voice_note); isFocusable = true
+                setOnClickListener { editVoice() }
+                background = android.graphics.drawable.RippleDrawable(ColorStateList.valueOf(outline), null, shape(Color.WHITE, 8))
+            }
+            editorVoiceRow = attachment
+            editorContent.addView(attachment, LinearLayout.LayoutParams(-1, maxOf(dp(40), editor.lineHeight)).apply { leftMargin = dp(24); rightMargin = dp(24) })
+            editorContent.addView(editor, LinearLayout.LayoutParams(-1, -2, 1f))
+            addView(editorContent, FrameLayout.LayoutParams(-1, -2))
+            refreshEditorVoice(note)
         }
         body.addView(editorScroll, FrameLayout.LayoutParams(-1, -1).apply { rightMargin = dp(12) })
         val rail = ScrollRail(this, editorScroll, outline).apply { setBackgroundColor(bg) }
@@ -473,7 +802,7 @@ class MainActivity : Activity() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 if (current !== note || screen != "editor") return
                 note.text = s.toString()
-                if (note.text.isNotBlank() && store.notes.none { it.id == note.id }) {
+                if (note.hasContent && store.notes.none { it.id == note.id }) {
                     store.notes.add(0, note)
                     createdNoteIds.add(note.id)
                 }
@@ -527,12 +856,15 @@ class MainActivity : Activity() {
         val note = current ?: return false
         val draft = editorDraft?.takeIf { it.id == note.id } ?: return false
         val before = store.notes.toList()
+        val discardedAudio = note.audioFile
         store.notes.clear(); store.notes.addAll(draft.discardFrom(before))
         if (!persist()) { store.notes.clear(); store.notes.addAll(before); return false }
         createdNoteIds.remove(note.id)
         // Keep the EditText binding usable if Android interrupts the exit animation.
         note.text = if (draft.index >= 0) draft.text else ""
         note.reminderAt = if (draft.index >= 0) draft.reminderAt else 0
+        note.audioFile = if (draft.index >= 0) draft.audioFile else ""
+        note.audioPeaks = if (draft.index >= 0) draft.audioPeaks else emptyList()
         val restoredIndex = store.notes.indexOfFirst { it.id == note.id }
         if (restoredIndex >= 0) store.notes[restoredIndex] = note
         current = null
@@ -540,7 +872,8 @@ class MainActivity : Activity() {
         activeEditor?.setSelection(note.text.length)
         current = note
         if (draft.index < 0) store.prefs.edit().putString("last", draft.previousLast).apply()
-        listPage?.submit()
+        store.removeUnusedAudio(discardedAudio)
+        refreshEditorVoice(note); listPage?.submit()
         return true
     }
     private fun settleEditor(dismiss: Boolean, exit: Boolean = false, left: Boolean = exit, restored: (() -> Unit)? = null) {
@@ -554,6 +887,7 @@ class MainActivity : Activity() {
             pendingList = false
             if (dismiss && exit) { exitApp(); return@withEndAction }
             if (dismiss) {
+                editorDraft?.let { store.removeUnusedAudio(it.audioFile) }
                 host.removeView(page)
                 overlay = null
                 activeEditor = null
@@ -633,7 +967,7 @@ class MainActivity : Activity() {
         if (settling) return true
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             resetGesture()
-            if (screen == "list" && confirmation == null && event.y > host.paddingTop + dp(64)) {
+            if (screen == "list" && confirmation == null && event.y > host.paddingTop + dp(64) && listPage?.let { !touchesSettingsInput(it, event.rawX, event.rawY) } != false) {
                 listGesture = SwipeProgress(ViewConfiguration.get(this).scaledTouchSlop.toFloat(), ViewConfiguration.getLongPressTimeout().toLong(), true)
                 listGesture?.start(event.x, event.y, event.eventTime)
                 velocity = VelocityTracker.obtain()
@@ -761,7 +1095,9 @@ class MainActivity : Activity() {
     private fun clearUndo() {
         undoTimeout?.let { undoHandler.removeCallbacks(it) }; undoTimeout = null
         undoPanel?.let { host.removeView(it) }; undoPanel = null; undoAppearance = null
+        val previous = try { org.json.JSONObject(store.prefs.getString("pending_undo", "{}") ?: "{}").optString("audioFile") } catch (_: Exception) { "" }
         store.prefs.edit().remove("pending_undo").apply()
+        if (previous.isNotEmpty()) store.removeUnusedAudio(previous)
     }
     private fun showPendingUndo() {
         val encoded = store.prefs.getString("pending_undo", null) ?: return
@@ -794,7 +1130,7 @@ class MainActivity : Activity() {
                     if (persist()) { clearUndo(); listPage?.submit() } else note.reminderAt = 0
                     return@setOnClickListener
                 }
-                val note = Note(entry.getString("id"), entry.getString("text"), entry.optLong("reminderAt"))
+                val note = Note(entry.getString("id"), entry.getString("text"), entry.optLong("reminderAt"), entry.optString("audioFile"), Store.readPeaks(entry.optJSONArray("audioPeaks")))
                 val index = entry.optInt("index").coerceIn(0, store.notes.size)
                 val inserted = store.notes.none { it.id == note.id }
                 if (inserted) store.notes.add(index, note)
@@ -821,15 +1157,16 @@ class MainActivity : Activity() {
     }
     private fun delete(note: Note, type: String, copy: Boolean = false, after: () -> Unit) {
         fun perform() {
+            if (playingId == note.id) stopPlayer()
             if (copy) copyText(note.text)
             val index = store.notes.indexOfFirst { it.id == note.id }
             if (index >= 0) store.notes.removeAt(index)
             if (persist()) {
                 if (current?.id == note.id) current = null
-                val undoEnabled = index >= 0 && note.text.isNotBlank() && store.prefs.getBoolean(type.replace("confirm_", "undo_"), true)
+                val undoEnabled = index >= 0 && note.hasContent && store.prefs.getBoolean(type.replace("confirm_", "undo_"), true)
                 if (index >= 0) clearUndo()
                 if (undoEnabled) {
-                    val entry = org.json.JSONObject().put("id", note.id).put("text", note.text).put("reminderAt", note.reminderAt).put("index", index)
+                    val entry = org.json.JSONObject().put("id", note.id).put("text", note.text).put("reminderAt", note.reminderAt).put("audioFile", note.audioFile).put("audioPeaks", org.json.JSONArray(note.audioPeaks)).put("index", index)
                         .put("editor", type == "confirm_editor").put("expires", System.currentTimeMillis() + store.prefs.getInt("undo_seconds", 4).coerceIn(1, 10) * 1000L)
                     store.prefs.edit().putString("pending_undo", entry.toString()).commit()
                     after()
@@ -837,11 +1174,11 @@ class MainActivity : Activity() {
                         entry.put("awaiting", true)
                         store.prefs.edit().putString("pending_undo", entry.toString()).commit()
                     } else showPendingUndo()
-                } else after()
+                } else { store.removeUnusedAudio(note.audioFile); after() }
             } else if (index >= 0) store.notes.add(index, note)
         }
-        if (note.text.isBlank() || !flag(type)) { perform(); return }
-        confirmation = AlertDialog.Builder(ContextThemeWrapper(this, if (darkTheme) android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert)).setTitle(str(R.string.delete_question)).setMessage(note.text.take(180))
+        if (!note.hasContent || !flag(type)) { perform(); return }
+        confirmation = AlertDialog.Builder(ContextThemeWrapper(this, if (darkTheme) android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert)).setTitle(str(R.string.delete_question)).setMessage(note.text.take(180).ifBlank { str(R.string.voice_note) })
             .setNegativeButton(str(R.string.cancel), null).setPositiveButton(str(R.string.delete)) { _, _ -> perform() }
             .setOnDismissListener { confirmation = null }.show().also {
                 it.window?.setBackgroundDrawable(shape(surface))
@@ -862,7 +1199,7 @@ class MainActivity : Activity() {
         ensureList().updateDeleteControls()
         host.isFocusableInTouchMode = true; host.requestFocus()
     }
-    private fun visibleNotes() = store.notes.filter { it.text.isNotBlank() && matchesReminderFilter(reminderFilter, Reminders.hasReminder(this, it)) }
+    private fun visibleNotes() = store.notes.filter { it.hasContent && matchesReminderFilter(reminderFilter, Reminders.hasReminder(this, it)) }
     private fun removeReminder(note: Note) {
         fun perform() {
             val previous = note.reminderAt
@@ -880,7 +1217,7 @@ class MainActivity : Activity() {
         }
         if (!flag("confirm_reminder")) { perform(); return }
         confirmation = AlertDialog.Builder(ContextThemeWrapper(this, if (darkTheme) android.R.style.Theme_Material_Dialog_Alert else android.R.style.Theme_Material_Light_Dialog_Alert))
-            .setTitle(str(R.string.remove_reminder_question)).setMessage(note.text.take(180))
+            .setTitle(str(R.string.remove_reminder_question)).setMessage(note.text.take(180).ifBlank { str(R.string.voice_note) })
             .setNegativeButton(str(R.string.cancel), null).setPositiveButton(str(R.string.delete)) { _, _ -> perform() }
             .setOnDismissListener { confirmation = null }.show().also { dialog ->
                 dialog.window?.setBackgroundDrawable(shape(surface, 28))
@@ -904,6 +1241,12 @@ class MainActivity : Activity() {
         val content = NotePreview(this@MainActivity).apply {
             setTextColor(fg); textSize = 16f * textScale(); setPadding(dp(18), dp(18), dp(18), dp(18))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        private var hasVoice = note.audioFile.isNotEmpty()
+        private val attachment = VoiceStrip(this@MainActivity).apply {
+            tag = "note-voice"; contentDescription = str(R.string.voice_play); isFocusable = true
+            setOnClickListener { if (!preview && screen == "list") store.notes.find { it.id == this@NoteCard.id }?.let { playVoice(it) } }
+            setOnLongClickListener { !preview && this@NoteCard.performLongClick() }
         }
         private val id = note.id
         private var hasReminder = Reminders.hasReminder(this@MainActivity, note)
@@ -930,7 +1273,10 @@ class MainActivity : Activity() {
             content.gravity = if (cardCompact()) Gravity.CENTER_VERTICAL else Gravity.TOP
             content.isSingleLine = cardCompact()
             val padding = (store.prefs.getFloat("text_padding", 12f).coerceIn(0f, 50f) * resources.displayMetrics.density).toInt()
-            content.setPadding(padding, if (cardCompact()) 0 else padding, if (cardCompact() && (badgeEnabled() || hasReminder)) maxOf(padding, dp(if (hasReminder && badgeEnabled()) 90 else 42)) else padding, if (cardCompact()) 0 else padding)
+            content.setPadding(if (hasVoice && cardCompact()) width / 3 + dp(8) else padding,
+                if (cardCompact()) 0 else padding + if (hasVoice) maxOf(dp(40), content.lineHeight) else 0,
+                if (cardCompact() && (badgeEnabled() || hasReminder)) maxOf(padding, dp(if (hasReminder && badgeEnabled()) 90 else 42)) else padding,
+                if (cardCompact()) 0 else padding)
             content.maxLines = if (cardCompact()) 1 else ((height - content.paddingTop - content.paddingBottom) / content.lineHeight.coerceAtLeast(1)).coerceAtLeast(1)
             content.cornerRadius = cardRadius
             content.compact = cardCompact()
@@ -955,6 +1301,15 @@ class MainActivity : Activity() {
                 val end = width - dp(if (badgeEnabled()) 56 else 8)
                 alarmBadge.layout(end - dp(28), (height - dp(28)) / 2, end, (height + dp(28)) / 2)
             } else alarmBadge.layout(cross.left, height - cross.bottom, cross.right, height - cross.top)
+            if (hasVoice) {
+                val padding = (store.prefs.getFloat("text_padding", 12f).coerceIn(0f, 50f) * resources.displayMetrics.density).toInt()
+                val rowHeight = maxOf(dp(40), content.lineHeight)
+                if (cardCompact()) attachment.layout(padding, 0, width / 3, height)
+                else {
+                    val right = if (badgeEnabled()) minOf(width - padding, cross.left - dp(4)) else width - padding
+                    attachment.layout(padding, padding, maxOf(padding, right), minOf(height, padding + rowHeight))
+                }
+            }
             content.reminderVisible = hasReminder
             content.reminderLeft = alarmBadge.left - dp(3).toFloat()
             content.reminderTop = alarmBadge.top - dp(3).toFloat()
@@ -967,7 +1322,7 @@ class MainActivity : Activity() {
             }
         }
         override fun drawChild(canvas: Canvas, child: View, drawingTime: Long): Boolean {
-            if (child !== content || cardCompact()) return super.drawChild(canvas, child, drawingTime)
+            if ((child !== content && child !== attachment) || cardCompact()) return super.drawChild(canvas, child, drawingTime)
             textClip.reset()
             textClip.addRoundRect(0f, 0f, width.toFloat(), height.toFloat(), cardRadius, cardRadius, Path.Direction.CW)
             val save = canvas.save(); canvas.clipPath(textClip)
@@ -991,6 +1346,7 @@ class MainActivity : Activity() {
             content.setPadding(dp(18), if (cardCompact()) 0 else dp(18), if (badgeEnabled()) dp(48) else dp(18), if (cardCompact()) 0 else dp(18))
             if (cardCompact()) content.isSingleLine = true
             addView(content, FrameLayout.LayoutParams(-1, -1))
+            addView(attachment, FrameLayout.LayoutParams(-1, dp(40), Gravity.TOP))
             addView(alarmBadge, FrameLayout.LayoutParams(dp(28), dp(28), Gravity.BOTTOM or Gravity.END))
             cross.tag = "note-delete-badge"
             if (!preview) cross.setOnLongClickListener {
@@ -1002,10 +1358,15 @@ class MainActivity : Activity() {
             update(note)
             if (preview) {
                 isClickable = false; isFocusable = false; cross.isClickable = false; cross.isFocusable = false
+                attachment.isClickable = false; attachment.isFocusable = false
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
             }
         }
         fun update(note: Note) {
+            hasVoice = note.audioFile.isNotEmpty()
+            attachment.visibility = if (hasVoice) View.VISIBLE else View.GONE
+            if (hasVoice) attachment.bind(note, store.audioFile(note.audioFile), accent)
+            content.visibility = View.VISIBLE
             hasReminder = Reminders.hasReminder(this@MainActivity, note)
             alarmBadge.visibility = if (hasReminder) View.VISIBLE else View.GONE
             val unread = Reminders.unread(this@MainActivity, note)
@@ -1025,8 +1386,8 @@ class MainActivity : Activity() {
                 } else content.text = if (cardCompact()) note.text.replace(Regex("[\\r\\n]+"), " ") else note.text
                 content.movementMethod = null
                 content.isClickable = false; content.isLongClickable = false; content.isFocusable = false
-                contentDescription = note.text
-                cross.contentDescription = str(R.string.delete_note, note.text.take(40))
+                contentDescription = if (note.audioFile.isNotEmpty()) "${str(R.string.voice_note)}. ${note.text}" else note.text
+                cross.contentDescription = str(R.string.delete_note, note.text.take(40).ifBlank { str(R.string.voice_note) })
                 rendered = note.text
             }
             cross.visibility = if (badgeEnabled()) View.VISIBLE else View.GONE
@@ -1201,6 +1562,7 @@ class MainActivity : Activity() {
         }
     }
     private fun settings(interactive: Boolean = false, animated: Boolean = false) {
+        stopPlayer()
         screen = "settings"; frame(interactive)
         hideKeyboard()
         val bindings = mutableListOf<() -> Unit>()
@@ -1433,6 +1795,9 @@ private class Glyph(context: android.content.Context, var kind: String, var ink:
         fun line(x: Float, y: Float, x2: Float, y2: Float) = canvas.drawLine(x, y, x2, y2, paint)
         when (kind) {
             "alarm", "alarm-small", "alarm-off" -> { canvas.drawCircle(12f,13f,8f,paint); line(12f,9f,12f,13f); line(12f,13f,15f,15f); line(3f,5f,6f,2f); line(18f,2f,21f,5f); line(6f,20f,4f,22f); line(18f,20f,20f,22f); if (kind == "alarm-off") line(3f,3f,21f,21f) }
+            "mic" -> { canvas.drawRoundRect(9f,2f,15f,15f,3f,3f,paint); canvas.drawArc(5f,7f,19f,19f,0f,180f,false,paint); line(5f,10f,5f,12f); line(19f,10f,19f,12f); line(12f,19f,12f,22f); line(8f,22f,16f,22f) }
+            "pause" -> { val previous = paint.strokeWidth; paint.strokeWidth = 4f; line(8f,5f,8f,19f); line(16f,5f,16f,19f); paint.strokeWidth = previous }
+            "play" -> { val path = Path().apply { moveTo(7f,4f); lineTo(20f,12f); lineTo(7f,20f); close() }; paint.style = Paint.Style.FILL; canvas.drawPath(path,paint); paint.style = Paint.Style.STROKE }
             "back" -> { line(19f,12f,5f,12f); line(5f,12f,12f,5f); line(5f,12f,12f,19f) }
             "check" -> { line(4f,12f,9f,17f); line(9f,17f,20f,6f) }
             "delete" -> { line(4f,6f,20f,6f); line(9f,3f,15f,3f); canvas.drawRoundRect(6f,6f,18f,21f,2f,2f,paint); line(10f,10f,10f,17f); line(14f,10f,14f,17f) }

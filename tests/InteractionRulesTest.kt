@@ -208,4 +208,22 @@ fun main() {
     }
     check(noteIndex(0, 0, 0, true) == -1)
     println("PASS: locale fallback, interactive swipe/reversal/fling, stable reorder, both layout directions, insertion edge and keyboard resize anchoring")
+    val voiceOnly = Note("voice", audioFile = "original.wav", audioPeaks = listOf(.2f, .8f))
+    check(voiceOnly.hasContent && !Note(text = "  ").hasContent)
+    val voiceDraft = EditorDraft(voiceOnly.id, "raw  ", 1, "other", 123, voiceOnly.audioFile, voiceOnly.audioPeaks)
+    val editedVoice = voiceOnly.copy(text = "changed", audioFile = "replacement.wav", audioPeaks = listOf(.5f))
+    val restoredVoice = voiceDraft.discardFrom(listOf(Note("other", "keep"), editedVoice))
+    check(restoredVoice[1] == Note("voice", "raw  ", 123, "original.wav", listOf(.2f, .8f)))
+    check(EditorDraft("new-voice", "", -1).discardFrom(listOf(Note("new-voice", audioFile = "new.wav"))).isEmpty())
+    check(voiceDraft.discardFrom(listOf(Note("other", "keep")))[1].audioFile == "original.wav")
+    println("PASS: voice-only notes are nonblank; discard restores original audio, waveform, text, reminder and canonical index")
+
+    val dateStart = java.time.LocalDate.of(2026, 10, 15)
+    check(reminderDateLabel(java.time.LocalDate.of(2026, 10, 17), dateStart, java.util.Locale.ENGLISH) == "17 Sat")
+    check(reminderDateLabel(java.time.LocalDate.of(2026, 11, 2), dateStart, java.util.Locale.ENGLISH) == "2 Nov Mon")
+    check(reminderDateLabel(java.time.LocalDate.of(2027, 10, 2), dateStart, java.util.Locale.ENGLISH) == "2 Oct Sat")
+    check(reminderDateLabel(java.time.LocalDate.of(2026, 10, 17), dateStart, java.util.Locale.forLanguageTag("ru")) == "17 сб")
+    check(reminderDateLabel(java.time.LocalDate.of(2026, 11, 2), dateStart, java.util.Locale.forLanguageTag("ru")).endsWith(" пн"))
+    println("PASS: localized short weekdays in reminder dates, including month and year changes")
+
 }
