@@ -7,6 +7,7 @@ local.properties
 .idea/
 .signing/
 dist/
+cava/
 
 # Private signing material and local credentials
 *.keystore
