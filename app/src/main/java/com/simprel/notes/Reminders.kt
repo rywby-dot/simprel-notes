@@ -20,7 +20,10 @@ object Reminders {
     fun unread(c: Context, note: Note) = note.reminderAt > 0 && prefs(c).getLong("fired:${note.id}", 0) == note.reminderAt &&
         prefs(c).getLong("seen:${note.id}", 0) != note.reminderAt
     fun seen(c: Context, note: Note) {
-        if (unread(c, note)) prefs(c).edit().putLong("seen:${note.id}", note.reminderAt).apply()
+        if (unread(c, note)) {
+            prefs(c).edit().putLong("seen:${note.id}", note.reminderAt).apply()
+            HomeWidgets.requestUpdate(c)
+        }
         c.getSystemService(NotificationManager::class.java).cancel(note.id, 1)
     }
     fun sync(c: Context, notes: List<Note>, force: Boolean = false) {
@@ -85,6 +88,7 @@ object Reminders {
         }
         val notification = builder.build()
         try { manager.notify(id, 1, notification) } catch (_: SecurityException) { }
+        HomeWidgets.refresh(c)
         c.sendBroadcast(Intent("${c.packageName}.REMINDERS_CHANGED").setPackage(c.packageName))
     }
 }

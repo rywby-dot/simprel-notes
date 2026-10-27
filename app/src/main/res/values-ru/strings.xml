@@ -126,4 +126,10 @@
     <string name="voice_start_later">Сдвинуть начало вперёд</string>
     <string name="voice_end_earlier">Сдвинуть конец назад</string>
     <string name="voice_end_later">Сдвинуть конец вперёд</string>
+    <string name="new_voice_note">Новая голосовая заметка</string>
+    <string name="widget_quick_both">Быстрые заметки</string>
+    <string name="widget_last_note">Последняя заметка</string>
+    <string name="widget_unread_note">Непрочитанное напоминание</string>
+    <string name="widget_no_unread">Нет непрочитанных напоминаний</string>
+    <string name="widget_unread_count">Непрочитанных напоминаний: %1$d</string>
 </resources>

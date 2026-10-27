@@ -121,3 +121,13 @@ fun reorderFilteredNotes(notes: List<Note>, ids: List<String>, visibleIds: Set<S
     val reordered = ids.iterator()
     return notes.map { if (it.id in visibleIds) byId.getValue(reordered.next()) else it }
 }
+
+/** Widgets follow the last editor entry, independently of sorting and drag presentation. */
+fun widgetLastNote(notes: List<Note>, lastId: String): Note? =
+    notes.find { it.id == lastId && it.hasContent } ?: notes.firstOrNull { it.hasContent }
+
+fun widgetUnreadNotes(notes: List<Note>, unreadIds: Set<String>): List<Note> =
+    notes.filter { it.hasContent && it.id in unreadIds }.sortedByDescending { it.reminderAt }
+
+fun widgetCornerRadius(width: Float, height: Float, columns: Int, rows: Int): Float =
+    minOf(width / columns.coerceAtLeast(1), height / rows.coerceAtLeast(1)) / 2f

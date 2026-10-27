@@ -6,8 +6,8 @@ android {
         applicationId = "com.simprel.notes"
         minSdk = 26
         targetSdk = 37
-        versionCode = 22
-        versionName = "2.0"
+        versionCode = 23
+        versionName = "2.1"
         testInstrumentationRunner = "com.simprel.notes.SmokeTests"
     }
     signingConfigs {

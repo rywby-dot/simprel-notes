@@ -10,5 +10,34 @@
   <receiver android:name="com.simprel.notes.ReminderReceiver" android:exported="false">
    <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/><action android:name="android.intent.action.MY_PACKAGE_REPLACED"/><action android:name="android.intent.action.TIME_SET"/><action android:name="android.intent.action.TIMEZONE_CHANGED"/><action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED"/></intent-filter>
   </receiver>
+  <activity android:name="com.simprel.notes.NewNoteShortcut" android:exported="true" android:label="@string/new_note" android:icon="@drawable/ic_new_note" android:theme="@android:style/Theme.Translucent.NoTitleBar">
+   <intent-filter><action android:name="android.intent.action.CREATE_SHORTCUT"/><category android:name="android.intent.category.DEFAULT"/></intent-filter>
+  </activity>
+  <activity android:name="com.simprel.notes.NewVoiceShortcut" android:exported="true" android:label="@string/new_voice_note" android:icon="@drawable/ic_shortcut_voice" android:theme="@android:style/Theme.Translucent.NoTitleBar">
+   <intent-filter><action android:name="android.intent.action.CREATE_SHORTCUT"/><category android:name="android.intent.category.DEFAULT"/></intent-filter>
+  </activity>
+  <receiver android:name="com.simprel.notes.QuickNoteWidget" android:exported="false" android:label="@string/new_note">
+   <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
+   <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_quick_note"/>
+  </receiver>
+  <receiver android:name="com.simprel.notes.QuickVoiceWidget" android:exported="false" android:label="@string/new_voice_note">
+   <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
+   <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_quick_voice"/>
+  </receiver>
+  <receiver android:name="com.simprel.notes.QuickBothWidget" android:exported="false" android:label="@string/widget_quick_both">
+   <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
+   <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_quick_both"/>
+  </receiver>
+  <receiver android:name="com.simprel.notes.LastNoteWidget" android:exported="false" android:label="@string/widget_last_note">
+   <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
+   <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_last_note"/>
+  </receiver>
+  <receiver android:name="com.simprel.notes.UnreadNoteWidget" android:exported="false" android:label="@string/widget_unread_note">
+   <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
+   <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_unread_note"/>
+  </receiver>
+  <receiver android:name="com.simprel.notes.HomeRefreshReceiver" android:exported="false">
+   <intent-filter><action android:name="android.intent.action.LOCALE_CHANGED"/><action android:name="android.intent.action.CONFIGURATION_CHANGED"/><action android:name="android.intent.action.MY_PACKAGE_REPLACED"/><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>
+  </receiver>
  </application>
 </manifest>

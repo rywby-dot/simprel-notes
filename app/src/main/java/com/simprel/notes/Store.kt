@@ -40,5 +40,6 @@ class Store(private val context: Context) {
         try { stream.write(array.toString().toByteArray(Charsets.UTF_8)); file.finishWrite(stream) }
         catch (e: Exception) { file.failWrite(stream); throw e }
         Reminders.sync(context, notes)
+        HomeWidgets.requestUpdate(context, notes)
     }
 }

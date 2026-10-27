@@ -126,4 +126,10 @@
     <string name="voice_start_later">Move start later</string>
     <string name="voice_end_earlier">Move end earlier</string>
     <string name="voice_end_later">Move end later</string>
+    <string name="new_voice_note">New voice note</string>
+    <string name="widget_quick_both">Quick notes</string>
+    <string name="widget_last_note">Last note</string>
+    <string name="widget_unread_note">Unread reminder</string>
+    <string name="widget_no_unread">No unread reminders</string>
+    <string name="widget_unread_count">Unread reminders: %1$d</string>
 </resources>

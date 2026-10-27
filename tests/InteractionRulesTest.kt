@@ -226,4 +226,20 @@ fun main() {
     check(reminderDateLabel(java.time.LocalDate.of(2026, 11, 2), dateStart, java.util.Locale.forLanguageTag("ru")).endsWith(" пн"))
     println("PASS: localized short weekdays in reminder dates, including month and year changes")
 
+    val homeOld = Note("home-old", "same", 100)
+    val homeNew = Note("home-new", "same", 300)
+    val homeVoice = Note("home-voice", audioFile = "voice.wav")
+    val homeNotes = listOf(Note("blank"), homeNew, homeOld, homeVoice)
+    check(widgetLastNote(homeNotes, homeOld.id) === homeOld)
+    check(widgetLastNote(homeNotes.reversed(), homeOld.id) === homeOld)
+    check(widgetLastNote(homeNotes, "missing") === homeNew)
+    check(widgetLastNote(listOf(homeVoice), "") === homeVoice)
+    check(widgetLastNote(emptyList(), "") == null)
+    check(widgetUnreadNotes(homeNotes, setOf(homeOld.id, homeNew.id)).map { it.id } == listOf(homeNew.id, homeOld.id))
+    check(widgetUnreadNotes(homeNotes, setOf("blank")).isEmpty())
+    check(widgetCornerRadius(72f, 72f, 1, 1) == 36f)
+    check(widgetCornerRadius(144f, 72f, 2, 1) == 36f)
+    check(widgetCornerRadius(144f, 144f, 2, 2) == 36f)
+    println("PASS: widget last-note identity, empty/voice fallback, unread recency/count and equal cell corner radii")
+
 }

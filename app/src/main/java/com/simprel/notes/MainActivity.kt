@@ -27,6 +27,11 @@ class MainActivity : Activity() {
     private lateinit var toolbar: LinearLayout
     private val markdown by lazy { Markwon.builder(this).usePlugin(StrikethroughPlugin.create()).build() }
     private var ready = false
+    private var pendingHomeVoice = false
+    private val homePreferenceChanges = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (key in setOf("last", "language", "theme", "accent", "text_scale")) HomeWidgets.requestUpdate(this)
+        if (key == "language") HomeShortcuts.publish(this)
+    }
     private var current: Note? = null
     private var editorDraft: EditorDraft? = null
     private var activeEditor: EditText? = null
@@ -78,7 +83,7 @@ class MainActivity : Activity() {
     private var accent = 0
     private var darkTheme = false
     private var restored: ScreenState? = null
-    private data class ScreenState(val screen: String, val note: Note?, val quick: Boolean, val returning: Boolean, val createdIds: Set<String>, val draft: EditorDraft?, val filter: String, val voice: VoiceSession? = null)
+    private data class ScreenState(val screen: String, val note: Note?, val quick: Boolean, val returning: Boolean, val createdIds: Set<String>, val draft: EditorDraft?, val filter: String, val voice: VoiceSession? = null, val voiceLaunch: Boolean = false)
     private data class VoiceSession(val audio: VoiceAudio, val start: Float, val end: Float)
     private var retainingVoice = false
     private fun dp(n: Int) = (n * resources.displayMetrics.density).toInt()
@@ -118,10 +123,13 @@ class MainActivity : Activity() {
             return
         }
         ready = true
+        store.prefs.registerOnSharedPreferenceChangeListener(homePreferenceChanges)
+        HomeShortcuts.publish(this)
         // Restore the platform default for tasks whose preview an older version disabled.
         if (android.os.Build.VERSION.SDK_INT >= 33) setRecentsScreenshotEnabled(true)
         colors()
         restored = lastNonConfigurationInstance as? ScreenState
+        pendingHomeVoice = restored?.voiceLaunch ?: false
         restored?.let { createdNoteIds.addAll(it.createdIds) }
         if (android.os.Build.VERSION.SDK_INT >= 33) onBackInvokedDispatcher.registerOnBackInvokedCallback(0) { back() }
     }
@@ -144,7 +152,8 @@ class MainActivity : Activity() {
         preparingBackground = false
         if (ready) {
             Reminders.sync(this, store.notes, force = true)
-            if (!openReminderIntent()) focusEditor()
+            if (!openHomeIntent() && !pendingHomeVoice) focusEditor()
+            if (pendingHomeVoice) { pendingHomeVoice = false; chooseVoice() }
             current?.takeIf { screen == "editor" }?.let { Reminders.seen(this, it) }
             listPage?.submit(); showPendingUndo()
         }
@@ -154,6 +163,7 @@ class MainActivity : Activity() {
         if (backgrounded) {
             confirmation?.dismiss()
             backgrounded = false
+            if (openHomeIntent()) { host.visibility = View.VISIBLE; restored = null; return }
             val wasInitialized = ::host.isInitialized
             val previous = restored
             restored = null
@@ -163,7 +173,7 @@ class MainActivity : Activity() {
                 when (previous.screen) {
                     "settings" -> settings()
                     "editor" -> {
-                        open(store.notes.find { it.id == previous.note?.id } ?: previous.note ?: Note())
+                        open(store.notes.find { it.id == previous.note?.id } ?: previous.note ?: Note(), interactive = previous.voiceLaunch || previous.voice != null)
                         previous.draft?.takeIf { it.id == current?.id }?.let { editorDraft = it }
                     }
                     else -> showList()
@@ -192,6 +202,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         reminderDialog?.dismiss()
         stopPlayer()
+        if (ready) store.prefs.unregisterOnSharedPreferenceChangeListener(homePreferenceChanges)
         if (ready && !isChangingConfigurations) editorDraft?.let { store.removeUnusedAudio(it.audioFile) }
         undoTimeout?.let { undoHandler.removeCallbacks(it) }
         super.onDestroy()
@@ -199,7 +210,7 @@ class MainActivity : Activity() {
     override fun onRetainNonConfigurationInstance(): Any {
         pauseVoice?.invoke()
         val session = voiceAudio?.let { audio -> retainingVoice = true; VoiceSession(audio, voiceWave?.start ?: 0f, voiceWave?.end ?: 1f) }
-        return ScreenState(screen, current, quickDelete, backgrounded, createdNoteIds.toSet(), editorDraft, reminderFilter, session)
+        return ScreenState(screen, current, quickDelete, backgrounded, createdNoteIds.toSet(), editorDraft, reminderFilter, session, pendingHomeVoice)
     }
     override fun onPause() {
         preparingBackground = true
@@ -229,7 +240,7 @@ class MainActivity : Activity() {
         backgrounded = !isChangingConfigurations && reminderDialog?.isShowing != true && !microphoneRequest
         super.onPause()
     }
-    override fun onStop() { unregisterReceiver(reminderChanges); if (ready) persist(); super.onStop() }
+    override fun onStop() { unregisterReceiver(reminderChanges); if (ready) { persist(); HomeWidgets.updateAll(this, store.notes) }; super.onStop() }
     @Deprecated("Used on Android 12 and older")
     override fun onBackPressed() { back() }
     private fun persist(): Boolean = try { store.save(); true } catch (_: Exception) {
@@ -237,12 +248,36 @@ class MainActivity : Activity() {
     }
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent); setIntent(intent)
-        if (ready && !backgrounded) openReminderIntent()
+        if (ready && !backgrounded) {
+            if (openHomeIntent() && pendingHomeVoice) {
+                host.post {
+                    if (!isFinishing && !isDestroyed && !preparingBackground && screen == "editor" && pendingHomeVoice) {
+                        pendingHomeVoice = false; chooseVoice()
+                    }
+                }
+            }
+        }
+    }
+    private fun openHomeIntent(): Boolean {
+        val action = intent.action
+        if (action !in setOf(HomeShortcuts.NEW_NOTE, HomeShortcuts.NEW_VOICE, HomeShortcuts.SHOW_LIST)) return openReminderIntent()
+        intent.action = android.content.Intent.ACTION_MAIN
+        pendingHomeVoice = false
+        intent.removeExtra("note_id")
+        reminderDialog?.dismiss(); stopPlayer()
+        if (action == HomeShortcuts.SHOW_LIST) showList()
+        else {
+            val voice = action == HomeShortcuts.NEW_VOICE
+            open(Note(), interactive = voice)
+            pendingHomeVoice = voice
+        }
+        return true
     }
     private fun openReminderIntent(): Boolean {
         val id = intent.getStringExtra("note_id") ?: return false
         intent.removeExtra("note_id")
         val note = store.notes.find { it.id == id } ?: return false
+        pendingHomeVoice = false
         reminderDialog?.dismiss()
         open(note)
         return true

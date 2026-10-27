@@ -51,7 +51,7 @@ run(tools / 'aapt2', 'compile', '--dir', OUT / 'markwon-res', '-o', OUT / 'markw
 manifest = (ROOT / 'app/src/main/AndroidManifest.xml').read_text().replace('<manifest ', '<manifest package="com.simprel.notes" ', 1)
 (OUT / 'AndroidManifest.xml').write_text(manifest)
 run(tools / 'aapt2', 'link', '-I', android, '--manifest', OUT / 'AndroidManifest.xml',
-    '--min-sdk-version', '26', '--target-sdk-version', '37', '--version-code', '22', '--version-name', '2.0',
+    '--min-sdk-version', '26', '--target-sdk-version', '37', '--version-code', '23', '--version-name', '2.1',
     '-o', OUT / 'unsigned.apk', '--java', OUT / 'generated', '--extra-packages', 'io.noties.markwon',
     OUT / 'resources.zip', OUT / 'markwon-res.zip')
 (OUT / 'resource-classes').mkdir(exist_ok=True)

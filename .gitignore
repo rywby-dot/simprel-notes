@@ -8,6 +8,7 @@ local.properties
 .signing/
 dist/
 cava/
+KeyMapper/
 
 # Private signing material and local credentials
 *.keystore
